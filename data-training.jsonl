@@ -1,0 +1,8 @@
+{"index":1,"prompt":"I want to create an invoice","completion":"Invoice Creation"}
+{"index":2,"prompt":"Create invoice","completion":"Invoice Creation"}
+{"index":3,"prompt":"Generate an invoice","completion":"Invoice Creation"}
+{"index":4,"prompt":"Please create invoice","completion":"Invoice Creation"}
+{"index":5,"prompt":"Please display previous invoice","completion":"Invoice Fetch"}
+{"index":6,"prompt":"Show me details of last invoice","completion":"Invoice Fetch"}
+{"index":7,"prompt":"Can you fetch details of previous invoice","completion":"Invoice Fetch"}
+{"index":8,"prompt":"View earlier response ","completion":"Invoice Fetch"}

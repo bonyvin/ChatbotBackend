@@ -1,0 +1,50 @@
+{"messages": [{"role": "user", "content": "I want to create an invoice"}, {"role": "assistant", "content": "Invoice Creation"}]}
+{"messages": [{"role": "user", "content": "Create invoice"}, {"role": "assistant", "content": "Invoice Creation"}]}
+{"messages": [{"role": "user", "content": "Generate an invoice"}, {"role": "assistant", "content": "Invoice Creation"}]}
+{"messages": [{"role": "user", "content": "Please create invoice"}, {"role": "assistant", "content": "Invoice Creation"}]}
+{"messages": [{"role": "user", "content": "Please assist me in invoice creation"}, {"role": "assistant", "content": "Invoice Creation"}]}
+{"messages": [{"role": "user", "content": "Please display previous invoice"}, {"role": "assistant", "content": "Invoice Fetch"}]}
+{"messages": [{"role": "user", "content": "Show me details of last invoice"}, {"role": "assistant", "content": "Invoice Fetch"}]}
+{"messages": [{"role": "user", "content": "Can you fetch details of previous invoice"}, {"role": "assistant", "content": "Invoice Fetch"}]}
+{"messages": [{"role": "user", "content": "View earlier response "}, {"role": "assistant", "content": "Invoice Fetch"}]}
+{"messages": [{"role": "user", "content": "Please assist me in fetching previous invoice details "}, {"role": "assistant", "content": "Invoice Fetch"}]}
+{"messages": [{"role": "user", "content": "Invoice created successfully. Thank you for choosing us"}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Invoice has been created successfully. Thank you for choosing us"}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Your invoice has been successfully created. We appreciate your business!"}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Invoice generation completed. Thank you for your continued support."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "The invoice was created successfully. Thanks for choosing our services!"}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Success! Your invoice is now ready. Thank you for partnering with us."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Invoice creation successful. We're grateful for your trust in us."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Your invoice has been successfully processed. Thank you for being a valued customer."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "We've successfully generated your invoice. Thank you for your patronage."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Your invoice is ready and successful. We appreciate your business!"}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Invoice created successfully. Thank you for choosing us! If you need any further assistance, feel free to ask"}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Your invoice has been created successfully. We appreciate your business! If you have any other questions, just let us know."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Invoice creation completed successfully. Thank you for choosing us! Should you need any further assistance, please don't hesitate to ask."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "The invoice has been successfully created. We value your patronage! If you need any additional help, feel free to ask."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Success! Your invoice has been created. Thank you for choosing our services. If you need anything else, we're here to help."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Your invoice is now created. Thank you for choosing us! If you have any more questions, feel free to reach out."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "The invoice has been successfully generated. We thank you for your business! If you need any further support, just ask."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Invoice successfully created. We appreciate your trust in us! If there's anything else you need, don't hesitate to ask."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Your invoice has been successfully processed. Thank you for choosing our service! If you require further assistance, please let us know."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "The invoice creation is successful. Thank you for choosing us! If you need any additional help, feel free to reach out."}, {"role": "assistant", "content": "Invoice Submission"}]}
+{"messages": [{"role": "user", "content": "Would you like to submit this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Are you ready to submit this data?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Shall I go ahead and submit these details?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Do you want to proceed with submitting this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Would you like me to submit this data now?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Is it okay to submit the provided information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Can I submit this information for you?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Should I submit these details?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Would you like to finalize and submit this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Do you confirm to submit this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\nDetails in list format\\nWould you like to submit this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nAre you ready to submit this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nShall I go ahead and submit these details?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nDo you want to proceed with submitting this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nWould you like me to submit this data now?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nIs it okay to submit the provided information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nCan I submit this information for you?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nShould I submit these details?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nWould you like to finalize and submit this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}
+{"messages": [{"role": "user", "content": "Here's the information you've provided:\\n_Details in list format_\\nDo you confirm to submit this information?"}, {"role": "assistant", "content": "Invoice Progressing"}]}

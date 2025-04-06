@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+openai
+pandas
+numpy
+matplotlib
+openai
+langchain
+huggingface-hub
+sqlalchemy
+pymysql
+langchain_community
+mysql-connector-python
