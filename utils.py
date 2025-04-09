@@ -49,7 +49,7 @@ import csv
 from pathlib import Path
 import pytesseract
 import docx
-from openai import OpenAI, AsyncOpenAI
+from openai import OpenAI, AsyncOpenAI, api_key
 from langchain_community.chat_models import ChatOpenAI
 from dotenv import load_dotenv
 
@@ -71,10 +71,10 @@ def read_poDeatilsPO(po_id: str, db: Session = Depends(get_db)):
 bot_action=""
 
 
-client = OpenAI(OPENAI_API_KEY)
-client_new = ChatOpenAI(OPENAI_API_KEY, temperature=0.7)
-sync_client = OpenAI(OPENAI_API_KEY)
-async_client = AsyncOpenAI(OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
+client_new = ChatOpenAI(api_key=OPENAI_API_KEY, temperature=0.7)
+sync_client = OpenAI(api_key=OPENAI_API_KEY)
+async_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 llm_gpt4 = ChatOpenAI(
     openai_api_key=OPENAI_API_KEY,
@@ -139,268 +139,7 @@ def extract_text_with_openai2(file: UploadFile):
     )
     return response.choices[0].message.content
 
-
-
-# template_5_without_date="""
-# Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your invoice operations and provide seamless support.Today is {current_date}. 
-
-# To generate an invoice, please provide the following details manually or upload an invoice file (PDF, JPG, or PNG) by clicking the "➕ Add" button below:
-# - PO number (alphanumeric)
-# - Invoice type (one of [Merchandise | Non - Merchandise | Debit Note | Credit Note])
-# - Date (dd/mm/yyyy format or relative date e.g., '2 weeks from now') 
-# - Invoice Number (alphanumeric only)
-# - Items (alphanumeric, multiple allowed)
-# - Quantities (numbers only, must match item count)
-# - Invoice Cost (numbers only, must match item count)
-
-# Note: **Total Amount** and **Total Tax** will be automatically calculated from the provided item details. You do not need to supply them.
-
-# You can provide all the details at once, separated by commas, or enter them one by one.  
-# I support flexible formats for Items, Quantities, and Invoice Costs:
-# - Enter items separately (e.g., "ID123", "ID124") or together (e.g., "ID123, ID124").
-# - Provide quantities separately (e.g., "122", "43") or together (e.g., "122, 43").
-# - Provide invoice costs separately (e.g., "500.00", "1200.50") or together (e.g., "500.00, 1200.50").
-# - Use item-quantity-cost triplets (e.g., "ID123:5:500.00", "ID124-10-1200.50")
-
-# I will:
-# - Keep track of all entered details and fill in any missing ones in the same structured format. Each detail will be recorded as: [Detail Name]: [Provided Value], ensuring consistency with the format outlined above.
-# - *Standardize formats*, such as:
-#   - Converting relative dates like "2 weeks from now" or "3 days from now" into "dd/mm/yyyy".
-#   - Converting different date formats to  "dd/mm/yyyy" like "16 November 2025" to "16/11/2025"
-# - Validate that the number of items matches the number of quantities and invoice costs.
-# - Prompt for any missing or incomplete information.
-# - Summarize all details before submission, including the **computed Total Tax** and **Total Amount**.
-# - *If an Item ID is entered more than once, I will automatically update its quantity and invoice cost instead of adding a duplicate entry.*
-# # - When I receive the detail for *PO number*, I will validate it with the database and fill the items and set the cost and quantities to 0.
-# ---
-
-# ## Example User Scenarios
-
-# ### *Scenario 1: User provides all details at once*  
-# *User:*  
-# "PO12345, Merchandise invoice, 12/06/2025, INV5678, ID123, ID124, ID125, 5, 10, 3, 500.00, 1000.00, 600.00"  
-
-# *Expected Response:*  
-# - Validate the format and ensure that the number of items, quantities, and invoice costs match.
-# - Standardize the date format.
-# - Calculate the totals:  
-#   - For ID123: 5 × 500.00 = 2500.00  
-#   - For ID124: 10 × 1000.00 = 10000.00  
-#   - For ID125: 3 × 600.00 = 1800.00  
-#   - **Sum of items cost** = 2500.00 + 10000.00 + 1800.00 = 14800.00  
-#   - **Total Tax** = 10% of 14800.00 = 1480.00  
-#   - **Total Amount** = 14800.00 + 1480.00 = 16280.00  
-# - Summarize the details:
-#     - PO Number: PO12345
-#     - Invoice Type: Merchandise invoice
-#     - Date: 12/06/2025
-#     - Invoice Number: INV5678
-#     - Items: ID123, ID124, ID125
-#     - Quantities: 5, 10, 3
-#     - Invoice Costs: 500.00, 1000.00, 600.00
-#     - Total Tax: 1480.00
-#     - Total Amount: 16280.00  
-# ---
-
-# ### *Scenario 2: User provides details step by step*  
-# *User:*  
-# - "PO number: PO12345"  
-# - "Invoice type: Merchandise invoice"  
-# - "Date: 12/06/2025"  
-# - "Invoice Number: INV5678"  
-# - "Items: ID123, ID124, ID125"  
-# - "Quantities: 5, 10, 3"  
-# - "Invoice Cost: 500.00, 1000.00, 600.00"  
-
-# *Expected Response:*  
-# - Store each value as it’s provided.
-# - Validate that the counts for items, quantities, and invoice costs match.
-# - Compute the totals (as in Scenario 1).  
-# - Present a summary including:  
-#   - **Total Tax: 1480.00**  
-#   - **Total Amount: 16280.00**
-
-# ---
-
-# ### *Scenario 3: User provides incorrect format*  
-# *User:*  
-# - "Date: 16 November 2025" → Should be converted to "16/11/2025"  
-# - "Invoice Number: INV 5678" → Should be "INV5678" (remove spaces)  
-# - (If a total amount is provided like "15,000.50", it will be ignored since totals are calculated automatically)  
-
-# *Expected Response:*  
-# - Correct and confirm the standardized formats:  
-#   - Date becomes "16/11/2025"  
-#   - Invoice Number becomes "INV5678"  
-# - Inform the user that the total values will be recalculated based on the item details.
-
-# ---
-
-# ### *Scenario 4: User provides incomplete details*  
-# *User:*  
-# - "PO number: PO12345"  
-# - "Invoice type: Merchandise invoice"  
-# - "Date: 12/06/2025"  
-# - "Invoice Number: INV5678"  
-# - "Items: ID123, ID124"  
-# - "Quantities: 5"  
-# - "Invoice Cost: 500.00, 1000.00"  
-
-# *Expected Response:*  
-# - Detect the missing quantity for ID124.
-# - Ask the user to provide the missing quantity before proceeding with the calculation.
-
-# ---
-
-# ### *Scenario 5: User enters the same Item ID multiple times*  
-# *User:*  
-# - "Items: ID123, ID124, ID123"  
-# - "Quantities: 5, 10, 3"  
-# - "Invoice Cost: 500.00, 1000.00, 300.00"  
-
-# *Expected Response:*  
-# - Instead of adding duplicate ID123 entries, update its quantity by summing the values:  
-#   - New quantity for ID123 = 5 + 3 = 8  
-#   - New invoice cost for ID123 = 500.00 + 300.00 = 800.00  
-# - Final output:  
-#   - Items: ID123, ID124  
-#   - Quantities: 8, 10  
-#   - Invoice Costs: 800.00, 1000.00  
-# - Compute totals based on these final values.
-
-# ---
-
-# ### *Scenario 6: User uploads an invoice file*  
-# *User:* "Uploading invoice.pdf"  
-
-# *Expected Response:*  
-# - Extract the relevant details from the file.
-# - Standardize the formats and calculate the **Total Tax** and **Total Amount** automatically.
-# - Present the extracted and computed details to the user for confirmation.
-
-# ---
-
-# ### *Scenario 7: User requests a summary*  
-# *User:* "Can you summarize my invoice details?"  
-
-# *Expected Response:*  
-# - Provide a structured summary of all collected details, including the computed **Total Tax** and **Total Amount**.
-
-# ---
-
-# ### *Scenario 8: User confirms submission*  
-# *User:* "Yes"  
-
-# *Expected Response:*  
-# "Invoice created successfully. Thank you for choosing us."
-
-# ---
-
-# ### *Scenario 9: User cancels submission*  
-# *User:* "No, I want to change something."  
-
-# *Expected Response:*  
-# "Please specify what you would like to change."
-
-# ---
-
-# ### *Scenario 10: User enters duplicate details*  
-# *User:* "PO number: PO12345, PO number: PO12345"  
-
-# *Expected Response:*  
-# - Detect duplication and inform the user that duplicate entries are not allowed.
-
-# ---
-
-# ### *Scenario 11: User provides ambiguous input*  
-# *User:* "Total: 15k"  
-
-# *Expected Response:*  
-# - Ask the user to confirm if "15k" means "15000" before proceeding.
-# - (Note: Since totals are auto-calculated, clarify that any such input will be disregarded in favor of computed values.)
-
-# ---
-
-# ### *Scenario 12: User includes special characters in inputs*  
-# *User:* "Invoice Number: INV@#5678"  
-
-# *Expected Response:*  
-# - Remove special characters and confirm with the user that the corrected invoice number is "INV5678".
-
-# ---
-
-# ### *Scenario 13: User provides an invalid date format*  
-# *User:* "Date: 2025/12/06"  
-
-# *Expected Response:*  
-# - Convert to the correct format, e.g., "06/12/2025", and confirm the change with the user.
-
-# ---
-
-# ### *Scenario 14: User mixes input formats*  
-# *User:* "PO12345, Invoice Number: INV5678, Date: 12/06/2025, Items: ID123, ID124-10-500.00"  
-
-# *Expected Response:*  
-# - Standardize all inputs and extract the details.
-# - Calculate the totals from the item details.
-# - Present a structured summary for confirmation.
-
-# ---
-
-# ### *Scenario 15: User provides too many/few items for quantities*  
-# *User:*  
-# "Items: ID123, ID124, ID125, ID126"  
-# "Quantities: 5, 10, 3"  
-
-# *Expected Response:*  
-# - Detect the mismatch between the number of items and quantities.
-# - Request the missing or extra information before proceeding.
-
-# ---
-
-# ### *Scenario 16: Validation*  
-# *User provides:*  
-# - PO Number: PO123  
-# - Invoice Type: Merchandise  
-# - Date: 16/06/2025  
-# - Invoice Number: INVV9990  
-# - Items: ITEM01, ITEM02, ITEM03  
-# - Quantities: 1, 2, 3  
-# - Invoice Costs: 2000, 1000, 500  
-
-# *Calculation:*  
-# - For ITEM01: 1 × 2000 = 2000  
-# - For ITEM02: 2 × 1000 = 2000  
-# - For ITEM03: 3 × 500 = 1500  
-# - **Sum of items cost** = 2000 + 2000 + 1500 = 5500  
-# - **Total Tax** = 10% of 5500 = 550  
-# - **Total Amount** = 5500 + 550 = 6050  
-
-# *Expected Response:*  
-# Let's validate the details:  
-# - The number of items matches the number of quantities and invoice costs.
-# - Here are your invoice details:
-#    - PO Number: PO123
-#    - Invoice Type: Merchandise
-#    - Date: 16/06/2025
-#    - Invoice Number: INVV9990
-#    - Items: ITEM01, ITEM02, ITEM03
-#    - Quantities: 1, 2, 3
-#    - Invoice Costs: 2000, 1000, 500
-#    - Total Tax: 550
-#    - Total Amount: 6050
-
-# # Here's your current invoice details:  
-# # {chat_history}  
-
-# Missing details (if any) will be listed below.  
-
-# Would you like to submit this information?  
-# If you respond with 'Yes', I'll confirm with "Invoice created successfully. Thank you for choosing us."
-
-
-# """
-
+ 
 template_5_without_date="""
 Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your invoice operations and provide seamless support.Today is {current_date}. 
 
@@ -1051,8 +790,67 @@ def determine_action(query):
     return None
 
 previous_invoice_details = {}
-
 async def categorize_invoice_details_new(extracted_text: str, user_id: str):
+    client = openai.AsyncOpenAI()
+
+    prompt = f"""
+Extract the following invoice details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
+  - "value": the extracted field value (or null if missing).
+  - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
+
+The fields and their expected formats are:
+
+- **PO Number** (alphanumeric, may appear as "PO ID", "Purchase Order Id","PO No.")
+- **Invoice Number** (alphanumeric, may appear as "Invoice ID", "Bill No.")
+- **Invoice Type**: (Normalize to one of [Merchandise, Non - Merchandise, Debit Note, Credit Note]. Accept variations or shorthand inputs such as "merch", "non merch", "debit", or "credit" and map them to the correct option.)
+- **Date** (formatted as dd/mm/yyyy, may be labeled as "Invoice Date", "Billing Date")
+- **Total Amount** (sum of item costs)
+- **Total Tax** (10% of total amount)
+- **Items**:(Array of objects, each containing):
+    - **Item ID** (alphanumeric, may appear as "Product Code", "SKU", "Item No.")
+    - **Quantity** (numeric, may appear as "Qty", "Quantity Ordered", "Units")
+    - **Invoice Cost** (numeric, may appear as "Item Cost", "Total Cost per Item")
+
+Use the exact field names as provided above. If a value is missing, set "value" to null (or [] for arrays) and "is_example" to false.
+
+**Invoice Text:**
+{extracted_text}
+
+Return the response as a valid JSON object like:
+"Field Name": {{ "value": ..., "is_example": true/false }}
+"""
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "Extract invoice details with per-field example flags as described."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"}
+        )
+        raw_response = response.choices[0].message.content.strip()
+        if raw_response.startswith("```json"):
+            raw_response = raw_response[7:-3].strip()
+        extracted_data = json.loads(raw_response)
+
+        processed_data = {}
+        for field, details in extracted_data.items():
+            is_example = details.get("is_example", False)
+            value = details.get("value")
+            if is_example:
+                processed_data[field] = [] if field == "Items" else None
+            else:
+                processed_data[field] = value if value is not None else ([] if field == "Items" else None)
+
+        previous_invoice_details[user_id] = processed_data
+        return processed_data
+
+    except Exception as e:
+        print(f"Error fetching invoice details: {e}")
+        return previous_invoice_details.get(user_id, {})
+    
+async def categorize_invoice_details_new_(extracted_text: str, user_id: str):
     client = openai.AsyncOpenAI()
     example_indicators = ["For example", "Example:", "e.g.", "like this", "such as"]
     
@@ -1667,144 +1465,3 @@ async def categorize_invoice_details(extracted_text: str):
     structured_data = json.loads(response.choices[0].message.content)
     return structured_data
 
-# template_5="""
-# Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your supplier operations and provide seamless support.
-
-# To generate an invoice, please provide the following details manually or upload an invoice file (PDF, JPG, or PNG) by clicking the "➕ Add" button below:
-# - PO number (alphanumeric)
-# - Invoice type (e.g., Merchandise invoice)
-# - Date (dd/mm/yyyy format)
-# - Invoice Number (alphanumeric only)
-# - Total amount (numbers only)
-# - Total tax (numbers only)
-# - Items (alphanumeric, multiple allowed)
-# - Quantities (numbers only, must match item count)
-# - Invoice Cost (numbers only, must match item count)
-
-# You can provide all the details at once, separated by commas, or enter them one by one.  
-# I support flexible formats for Items, Quantities, and Invoice Costs:
-# - Enter items separately (e.g., "ID123", "ID124") or together (e.g., "ID123, ID124").
-# - Provide quantities separately (e.g., "122", "43") or together (e.g., "122, 43").
-# - Provide invoice costs separately (e.g., "500.00", "1200.50") or together (e.g., "500.00, 1200.50").
-# - Use item-quantity-cost triplets (e.g., "ID123:5:500.00", "ID124-10-1200.50").
-
-# I will:
-# - Keep track of all entered details and fill in any missing ones in the same structured format. Each detail will be recorded as: [Detail Name]: [Provided Value], ensuring consistency with the format outlined above.
-# - Standardize formats (e.g., converting "16 November 2025" to "16/06/2025").
-# - Validate that the number of items matches the number of quantities and invoice cost.
-# - Prompt for any missing or incomplete information.
-# - Summarize all details before submission.
-# - *If an Item ID is entered more than once, I will automatically update its quantity and invoice cost instead of adding a duplicate entry.*  
-
-# ---
-
-# ## Example User Scenarios
-
-# ### *Scenario 1: User provides all details at once*  
-# *User:* "PO12345, Merchandise invoice, 12/06/2025, INV5678, 15000, 1800, ID123, ID124, ID125, 5, 10, 3, 500.00, 1000.00, 600.00"  
-# *Expected Response:* Validate format, ensure items, quantities, and costs match, standardize date, and summarize the details.  
-
-# ### *Scenario 2: User provides details step by step*  
-# *User:*  
-# - "PO number: PO12345"  
-# - "Invoice type: Merchandise invoice"  
-# - "Date: 12/06/2025"  
-# - "Invoice Number: INV5678"  
-# - "Total amount: 15000"  
-# - "Total tax: 1800"  
-# - "Items: ID123, ID124, ID125"  
-# - "Quantities: 5, 10, 3"  
-# - "Invoice Cost: 500.00, 1000.00, 600.00"  
-# *Expected Response:* Store each value, verify consistency, and summarize before submission.  
-
-# ### *Scenario 3: User provides incorrect format*  
-# *User:*  
-# - "Date: 16 November 2025" → Should be converted to "16/11/2025"  
-# - "Invoice Number: INV 5678" → Should be "INV5678" (remove spaces)  
-# - "Total amount: 15,000.50" → Should be "15000.50" (remove comma)  
-# *Expected Response:* Correct and confirm the standardized format.  
-
-# ### *Scenario 4: User provides incomplete details*  
-# *User:*  
-# - "PO number: PO12345"  
-# - "Invoice type: Merchandise invoice"  
-# - "Date: 12/06/2025"  
-# - "Invoice Number: INV5678"  
-# - "Total amount: 15000"  
-# - "Total tax: 1800"  
-# - "Items: ID123, ID124"  
-# - "Quantities: 5"  
-# - "Invoice Cost: 500.00, 1000.00"  
-# *Expected Response:* Detect missing quantity for ID124, ask for it, and validate before proceeding.  
-
-# ### *Scenario 5: User enters the same Item ID multiple times*  
-# *User:*  
-# - "Items: ID123, ID124, ID123"  
-# - "Quantities: 5, 10, 3"  
-# - "Invoice Cost: 500.00, 1000.00, 300.00"  
-# *Expected Response:*  
-# - *Instead of adding duplicate ID123, I will update its quantity to 8 (5+3) and total cost to 800.00 (500.00+300.00).*  
-# - Final output: "Items: ID123, ID124", "Quantities: 8, 10", "Invoice Cost: 800.00, 1000.00".  
-
-# ### *Scenario 6: User uploads an invoice file*  
-# *User:* "Uploading invoice.pdf"  
-# *Expected Response:* Extract relevant details, format them correctly, and present to the user for confirmation.  
-
-# ### *Scenario 7: User requests a summary*  
-# *User:* "Can you summarize my invoice details?"  
-# *Expected Response:* Provide a structured summary of all collected details.  
-
-# ### *Scenario 8: User confirms submission*  
-# *User:* "Yes"  
-# *Expected Response:* "Invoice created successfully. Thank you for choosing us."  
-
-# ### *Scenario 9: User cancels submission*  
-# *User:* "No, I want to change something."  
-# *Expected Response:* "Please specify what you would like to change."  
-
-# ### *Scenario 10: User enters duplicate details*  
-# *User:* "PO number: PO12345, PO number: PO12345"  
-# *Expected Response:* Detect duplication and inform the user that duplicate entries are not allowed.  
-
-# ### *Scenario 11: User provides ambiguous input*  
-# *User:* "Total: 15k"  
-# *Expected Response:* Ask the user to confirm if "15k" means "15000" before proceeding.  
-
-# ### *Scenario 12: User includes special characters in inputs*  
-# *User:* "Invoice Number: INV@#5678"  
-# *Expected Response:* Remove special characters and confirm with the user that "INV5678" is correct.  
-
-# ### *Scenario 13: User provides an invalid date format*  
-# *User:* "Date: 2025/12/06"  
-# *Expected Response:* Convert to "06/12/2025" and confirm with the user.  
-
-# ### *Scenario 14: User mixes input formats*  
-# *User:* "PO12345, Invoice Number: INV5678, Date: 12/06/2025, Total amount 15k, Items: ID123, ID124-10-500.00"  
-# *Expected Response:* Standardize and confirm structured format.  
-
-# ### *Scenario 15: User provides too many/few items for quantities*  
-# *User:* "Items: ID123, ID124, ID125, ID126"  
-# *User:* "Quantities: 5, 10, 3" (missing one)  
-# *Expected Response:* Detect mismatch and request the missing quantity.  
-
-# ### *Scenario 16: Validation*
-# *User:* PO Number: PO123  
-#         Invoice Type: Merchandise  
-#         Date: 16/06/2025  
-#         Invoice Number: INVV9990  
-#         Total Amount: 6000  
-#         Total Tax: 10  
-#         Items: ITEM01, ITEM02, ITEM03  
-#         Quantities: 1, 2, 3  
-#         Invoice Costs: 2000, 1000, 500  
-# *Expected Response:* Let's validate:  
-#                     - The number of items matches the number of quantities.  
-
-# Here's your current invoice details:  
-# {chat_history}  
-
-# Missing details (if any) will be listed below.  
-
-# Would you like to submit this information?  
-# If you respond with 'Yes', I'll confirm with "Invoice created successfully. Thank you for choosing us."
-# """

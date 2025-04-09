@@ -220,103 +220,70 @@ DEFAULT_PO_STRUCTURE = {
         }
     ]  # List of items with details
 }
-
-# async def categorize_po_details(extracted_text: str):
-#     client = openai.AsyncOpenAI()
-
-#     prompt = f"""
-#     Extract and structure the following details from this Purchase Order text. Accept different variations and short forms for each field:
-
-#     - **Supplier ID** (alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID", etc.)  
-#     - **Estimated Delivery Date** (formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery")  
-#     - **Total Quantity** (calculated by summing item quantities)  
-#     - **Total Cost** (calculated by summing item costs)  
-#     - **Total Tax** (10% of total cost)  
-#     - **Items** (multiple allowed, each item should have):  
-#       - **Item ID** (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
-#       - **Quantity** (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
-#       - **Cost per Unit** (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
-
-#     **Purchase Order Text:**
-#     {extracted_text}
-
-#     **Format the response as a valid JSON object. If a field is missing, return null for that field.**
-#     """
-
-#     response = await client.chat.completions.create(
-#         model="gpt-4-turbo",
-#         messages=[
-#             {"role": "system", "content": "Extract structured data from a purchase order, recognizing multiple formats for key fields."},
-#             {"role": "user", "content": prompt},
-#         ],
-#         response_format={"type": "json_object"}  # Ensure JSON output
-#     )
-
-#     structured_data = json.loads(response.choices[0].message.content)
-
-#     # Calculate total quantity, total cost, and total tax
-#     # total_quantity = sum(item["itemQuantity"] for item in structured_data["items"] if item["itemQuantity"])
-#     # total_cost = sum(item["itemQuantity"] * item["itemCost"] for item in structured_data["items"] if item["itemQuantity"] and item["itemCost"])
-#     # total_tax = total_cost * 0.1
-
-#     # structured_data["total_quantity"] = total_quantity
-#     # structured_data["total_cost"] = total_cost
-#     # structured_data["total_tax"] = total_tax
-
-#     return structured_data
-
+ 
 previous_po_details = {}
-# async def categorize_po_details(extracted_text: str, user_id: str):
-#     client = openai.AsyncOpenAI()
-    
-#     prompt = f"""
-#     Extract and structure the following details from this Purchase Order text. Accept different variations and short forms for each field:
-#     - **Supplier ID** (alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID", etc.)  
-#     - **Estimated Delivery Date** (formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery")  
-#     - **Total Quantity** (calculated by summing item quantities)  
-#     - **Total Cost** (calculated by summing item costs)  
-#     - **Total Tax** (10% of total cost)  
-#     - **Items** (multiple allowed, each item should have):  
-#       - **Item ID** (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
-#       - **Quantity** (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
-#       - **Cost per Unit** (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
-
-#     **Purchase Order Text:**
-#     {extracted_text}
-
-#     **Format the response as a valid JSON object. If a field is missing, return null for that field.**
-#     """
-    
-#     try:
-#         response = await client.chat.completions.create(
-#             model="gpt-4-turbo",
-#             messages=[
-#                 {"role": "system", "content": "Extract structured data from a purchase order, recognizing multiple formats for key fields."},
-#                 {"role": "user", "content": prompt},
-#             ],
-#             response_format={"type": "json_object"}  # Ensure JSON output
-#         )
-#         raw_response = response.choices[0].message.content.strip()
-#         print("Raw response: ",raw_response)
-#         if raw_response.startswith("```json"):
-#             raw_response = raw_response[7:-3].strip()  # Remove triple backticks
-#         structured_data = json.loads(raw_response)
-#         # structured_data = json.loads(response.choices[0].message.content)
-
-#         # Check if all primary fields are None and the Items list is empty
-#         primary_fields = ["Supplier ID", "Estimated Delivery Date", "Total Quantity", "Total Cost", "Total Tax"]
-#         if all(structured_data.get(field) in [None, ""] for field in primary_fields) and not structured_data.get("Items"):
-#             return previous_po_details.get(user_id, {})  # Return previous data if exists
-
-#         # Store the latest valid PO details
-#         previous_po_details[user_id] = structured_data
-#         return structured_data
-    
-#     except Exception as e:
-#         print(f"Error fetching PO details: {e}")
-#         return previous_po_details.get(user_id, {})  # Return previous data if API call fails
 
 async def categorize_po_details(extracted_text: str, user_id: str):
+    client = openai.AsyncOpenAI()
+
+    prompt = f"""
+Extract the following purchase order details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
+  - "value": the extracted field value (or null if missing).
+  - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
+
+The fields and their expected formats are:
+
+- **Supplier ID** → (alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID")  
+- **Estimated Delivery Date** → (formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery")  
+- **Total Quantity** → (sum of all item quantities)  
+- **Total Cost** → (sum of all item costs)  
+- **Total Tax** → (10% of total cost)  
+- **Items** → (Array of objects, each containing):  
+    - **Item ID** → (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
+    - **Quantity** → (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
+    - **Cost Per Unit** → (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
+
+Use the exact field names as provided above. If a value is missing, set "value" to null (or [] for arrays) and "is_example" to false.
+
+**Purchase Order Text:**
+{extracted_text}
+
+Return the response as a valid JSON object like:
+"Field Name": {{ "value": ..., "is_example": true/false }}
+"""
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "Extract PO details with per-field example flags as described."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"}
+        )
+        raw_response = response.choices[0].message.content.strip()
+        if raw_response.startswith("```json"):
+            raw_response = raw_response[7:-3].strip()
+        extracted_data = json.loads(raw_response)
+
+        # Clean out example values
+        processed_data = {}
+        for field, details in extracted_data.items():
+            is_example = details.get("is_example", False)
+            value = details.get("value")
+            if is_example:
+                processed_data[field] = [] if field == "Items" else None
+            else:
+                processed_data[field] = value if value is not None else ([] if field == "Items" else None)
+
+        previous_po_details[user_id] = processed_data
+        return processed_data
+
+    except Exception as e:
+        print(f"Error fetching PO details: {e}")
+        return previous_po_details.get(user_id, {})
+    
+async def categorize_po_details_(extracted_text: str, user_id: str):
     client = openai.AsyncOpenAI()
     
     # Define keywords that indicate examples rather than actual user-provided data
@@ -419,261 +386,3 @@ async def categorize_po_details(extracted_text: str, user_id: str):
     except Exception as e:
         print(f"Error fetching PO details: {e}")
         return previous_po_details.get(user_id, {})  # Return previous data if API call fails
-# async def categorize_po_details(extracted_text: str, user_id: str):
-#     client = openai.AsyncOpenAI()
-    
-#     # Define keywords that indicate examples rather than actual user-provided data
-#     example_indicators = [
-#         "For example", "Example:", "e.g.", "like this", "such as"
-#     ]
-    
-#     # Check if the extracted text contains example indicators
-#     if any(keyword in extracted_text for keyword in example_indicators):
-#         print("Detected example instructions; skipping extraction.")
-#         return previous_po_details.get(user_id, {})
-    
-#     prompt = f"""
-#     Extract and structure the following details from this Purchase Order text. Accept different variations and short forms for each field:
-#     - **Supplier ID** (alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID", etc.)  
-#     - **Estimated Delivery Date** (formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery")  
-#     - **Total Quantity** (calculated by summing item quantities)  
-#     - **Total Cost** (calculated by summing item costs)  
-#     - **Total Tax** (10% of total cost)  
-#     - **Items** (multiple allowed, each item should have):  
-#       - **Item ID** (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
-#       - **Quantity** (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
-#       - **Cost per Unit** (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
-    
-#     **Ensure that items provided as examples are excluded from the extraction.**
-
-#     **Purchase Order Text:**
-#     {extracted_text}
-    
-#     **Format the response as a valid JSON object. If a field is missing, return null for that field.**
-#     """
-    
-#     try:
-#         response = await client.chat.completions.create(
-#             model="gpt-4-turbo",
-#             messages=[
-#                 {"role": "system", "content": "Extract structured data from a purchase order, recognizing multiple formats for key fields."},
-#                 {"role": "user", "content": prompt},
-#             ],
-#             response_format={"type": "json_object"}  # Ensure JSON output
-#         )
-#         raw_response = response.choices[0].message.content.strip()
-#         print("Raw response: ", raw_response)
-        
-#         if raw_response.startswith("```json"):
-#             raw_response = raw_response[7:-3].strip()  # Remove triple backticks
-        
-#         structured_data = json.loads(raw_response)
-        
-#         # Validate if extracted items are actual user input and not examples
-#         if structured_data.get("Items"):
-#             valid_items = []
-#             for item in structured_data["Items"]:
-#                 item_text = f"{item['Item ID']}:{item['Quantity']}:{item['Cost per Unit']}"
-#                 if any(keyword in extracted_text for keyword in example_indicators):
-#                     continue  # Ignore example items
-#                 valid_items.append(item)
-#             structured_data["Items"] = valid_items
-        
-#         # Check if all primary fields are None and the Items list is empty
-#         primary_fields = ["Supplier ID", "Estimated Delivery Date", "Total Quantity", "Total Cost", "Total Tax"]
-#         if all(structured_data.get(field) in [None, ""] for field in primary_fields) and not structured_data.get("Items"):
-#             return previous_po_details.get(user_id, {})  # Return previous data if exists
-
-#         # Store the latest valid PO details
-#         previous_po_details[user_id] = structured_data
-#         return structured_data
-    
-#     except Exception as e:
-#         print(f"Error fetching PO details: {e}")
-#         return previous_po_details.get(user_id, {})  # Return previous data if API call fails
-
-
-
-# template_PO="""
-# Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your purchase order operations and provide seamless support.  
-
-# To generate a *Purchase Order (PO)*, please provide the following details manually or upload a PO file (PDF, JPG, or PNG) by clicking the "➕ Add" button below:  
-# - *PO Number* (alphanumeric)  
-# - *Supplier ID* (alphanumeric)  
-# - *Lead Time* (in days)  
-# - *Estimated Delivery Date* (dd/mm/yyyy format)  
-# - *Total Quantity* (numbers only)  
-# - *Total Cost* (numbers only)  
-# - *Total Tax* (numbers only)  
-# - *Items* (multiple allowed, each must have the following details):  
-#   - *Item ID* (alphanumeric)  
-#   - *Item Description* (text)  
-#   - *Quantity* (numbers only)  
-#   - *Cost per Unit* (numbers only)  
-
-# You can provide all the details at once, separated by commas, or enter them one by one.  
-
-# ### *Supported Input Formats*  
-# - Enter *items separately* (e.g., "ID123", "ID124") or together (e.g., "ID123, ID124").  
-# - Provide *quantities separately* (e.g., "100", "50") or together (e.g., "100, 50").  
-# - Provide *cost per unit separately* (e.g., "500.00", "1200.50") or together (e.g., "500.00, 1200.50").  
-# - Use *item-quantity-cost triplets* (e.g., "ID123:100:500.00", "ID124:50:1200.50").  
-
-# ### *My Capabilities*  
-# - *Track all entered details* and fill in any missing ones in a structured format:  
-#   - [Detail Name]: [Provided Value]  
-# - *Standardize formats*, such as:  
-#   - Converting "16 November 2025" to "16/11/2025".  
-# - *Validate entries*, ensuring that:  
-#   - The number of items matches the number of quantities and costs.  
-# - *Detect and update duplicate Item IDs* instead of adding new entries:  
-#   - If an *Item ID is entered multiple times, I will **sum its quantity and cost* instead of creating duplicates.  
-# - *Prompt for missing information* if required.  
-# - *Summarize all details before final submission.*  
-
-# ---
-
-# ## *Example User Scenarios*  
-
-# ### *Scenario 1: User provides all details at once*  
-# *User:* "PO12345, SUP001, 7, 12/06/2025, 500, 250000, 18000, ID123, ID124, ID125, Laptop, Monitor, Mouse, 100, 50, 350, 500.00, 1200.00, 25.00"  
-# *Expected Response:* Validate input, ensure correct formats, and provide a structured summary.  
-
-# ### *Scenario 2: User provides details step by step*  
-# *User:*  
-# - "PO Number: PO12345"  
-# - "Supplier ID: SUP001"  
-# - "Lead Time: 7"  
-# - "Estimated Delivery Date: 12/06/2025"  
-# - "Total Quantity: 500"  
-# - "Total Cost: 250000"  
-# - "Total Tax: 18000"  
-# - "Items: ID123, ID124, ID125"  
-# - "Item Description: Laptop, Monitor, Mouse"  
-# - "Quantities: 100, 50, 350"  
-# - "Cost: 500.00, 1200.00, 25.00"  
-# *Expected Response:* Store each entry, validate, and summarize before submission.  
-
-# ### *Scenario 3: User provides incorrect format*  
-# *User:*  
-# - "Estimated Delivery Date: 16 November 2025" → Convert to "16/11/2025"  
-# - "Total Cost: 2,50,000.00" → Convert to "250000.00"  
-# *Expected Response:* Standardize the format and confirm corrections with the user.  
-
-# ### *Scenario 4: User enters the same Item ID multiple times*  
-# *User:*  
-# - "Items: ID123, ID124, ID123"  
-# - "Quantities: 100, 50, 30"  
-# - "Cost: 500.00, 1200.00, 300.00"  
-# *Expected Response:* Instead of duplicating *ID123, update its total quantity **(100+30 = 130)* and total cost *(500.00 + 300.00 = 800.00)*.  
-
-# Final stored values:  
-# - *Items:* "ID123, ID124"  
-# - *Quantities:* "130, 50"  
-# - *Costs:* "800.00, 1200.00"  
-
-# ### *Scenario 5: User uploads a PO file*  
-# *User:* "Uploading purchase_order.pdf"  
-# *Expected Response:* Extract key information, format correctly, and present for confirmation.  
-
-# ### *Scenario 6: User requests a summary*  
-# *User:* "Can you summarize my PO details?"  
-# *Expected Response:* Provide a structured summary of all collected details.  
-
-# ### *Scenario 7: User confirms submission*  
-# *User:* "Yes"  
-# *Expected Response:* "Purchase Order created successfully. Thank you for choosing us."  
-
-# ### *Scenario 8: User cancels submission*  
-# *User:* "No, I want to change something."  
-# *Expected Response:* "Please specify what you would like to change."  
-
-# ### *Scenario 9: User enters duplicate details*  
-# *User:* "PO number: PO12345, PO number: PO12345"  
-# *Expected Response:* Detect duplication and notify the user.  
-
-# ### *Scenario 10: User provides ambiguous input*  
-# *User:* "Total: 250k"  
-# *Expected Response:* Ask the user to confirm if "250k" means "250000".  
-
-# ### *Scenario 11: User includes special characters in inputs*  
-# *User:* "Supplier ID: SUP@#001"  
-# *Expected Response:* Remove special characters and confirm if "SUP001" is correct.  
-
-# ### *Scenario 12: User provides an invalid date format*  
-# *User:* "Estimated Delivery Date: 2025/12/06"  
-# *Expected Response:* Convert to "06/12/2025" and confirm with the user.  
-
-# ### *Scenario 13: User mixes input formats*  
-# *User:* "PO12345, Supplier ID: SUP001, Lead Time: 7 days, Est Delivery: 12/06/2025, Items: ID123, ID124-50-500.00"  
-# *Expected Response:* Standardize and confirm structured format.  
-
-# ### *Scenario 14: User provides too many/few items for quantities*  
-# *User:*  
-# - "Items: ID123, ID124, ID125, ID126"  
-# - "Quantities: 100, 50, 350" (missing one)  
-# *Expected Response:* Detect mismatch and request the missing quantity.  
-
-# ---
-
-# *Here's your current Purchase Order details:*  
-# {chat_history}  
-
-# Missing details (if any) will be listed below.  
-
-# Would you like to submit this information?  
-# If you respond with 'Yes', I'll confirm with *"Purchase Order created successfully. Thank you for choosing us."*
-# """
-
-# DEFAULT_PO_STRUCTURE = {
-#     "po_number": None,
-#     "supplier_id": None,
-#     "lead_time": None,
-#     "estimated_delivery_date": None,
-#     "total_quantity": None,
-#     "total_cost": None,
-#     "total_tax": None,
-#     "items": [
-#         {
-#             "itemId":None,
-#             "itemDescription":None,
-#             "itemQuantity":None,
-#             "itemCost":None
-#         }]  # List of items with details
-# }
-# async def categorize_po_details(extracted_text: str):
-#     client = openai.AsyncOpenAI()
-
-#     prompt = f"""
-#     Extract and structure the following details from this Purchase Order text. Accept different variations and short forms for each field:
-
-#     - **PO Number** (alphanumeric, accepts variations like: "PO", "PO No.", "PO ID", "PO Number", "po num", etc.)  
-#     - **Supplier ID** (alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID", etc.)  
-#     - **Lead Time** (in days, may appear as "Lead Time", "Delivery Lead Time", "Expected Days")  
-#     - **Estimated Delivery Date** (formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery")  
-#     - **Total Quantity** (numeric, may be labeled as "Total Qty", "Quantity Ordered", "Total Items")  
-#     - **Total Cost** (numeric, may appear as "Total Price", "Order Amount", "Subtotal")  
-#     - **Total Tax** (numeric, may be labeled as "Tax", "VAT", "GST", "Total Tax Amount")  
-#     - **Items** (multiple allowed, each item should have):  
-#       - **Item ID** (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
-#       - **Item Description** (text, if available)  
-#       - **Quantity** (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
-#       - **Cost per Unit** (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
-
-#     **Purchase Order Text:**
-#     {extracted_text}
-
-#     **Format the response as a valid JSON object. If a field is missing, return null for that field.**
-#     """
-
-#     response = await client.chat.completions.create(
-#         model="gpt-4-turbo",
-#         messages=[
-#             {"role": "system", "content": "Extract structured data from a purchase order, recognizing multiple formats for key fields."},
-#             {"role": "user", "content": prompt},
-#         ],
-#         response_format={"type": "json_object"}  # Ensure JSON output
-#     )
-
-#     structured_data = json.loads(response.choices[0].message.content)
-#     return structured_data

@@ -52,7 +52,7 @@ def checkValidation(invoice_detail):
 
 def run_conversation(data,db: Session = Depends(get_db)):
 
-   client = OpenAI(OPENAI_API_KEY)
+   client = OpenAI(api_key=OPENAI_API_KEY)
 
    # Step 1: send the conversation and available functions to the model
 

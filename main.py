@@ -79,22 +79,6 @@ user_po_details = {}
 
 
 #Store
-# @app.post("/storeCreation/", status_code=status.HTTP_201_CREATED)
-# def create_store_details(storeDetails:StoreDetailsSchema, db: Session = Depends(get_db)):
-#     db_storeDetails = models.StoreDetails(
-#         storeId=storeDetails.storeId,
-#         storeName=storeDetails.storeName,
-#         address=storeDetails.address,
-#         city=storeDetails.city,
-#         state=storeDetails.state,
-#         zipCode=storeDetails.zipCode,
-#         phone=storeDetails.phone
-#     )
-#     db.add(db_storeDetails)
-#     db.commit()
-#     db.refresh(db_storeDetails)
-#     return db_storeDetails
-
 @app.post("/storeCreation/", status_code=status.HTTP_201_CREATED)
 def create_store_details(storeDetails:StoreDetailsSchema, db: Session = Depends(get_db)):
     db_storeDetails = models.StoreDetails(**storeDetails.dict())
@@ -116,13 +100,6 @@ def get_stores_by_id(storeId : str, db: Session = Depends(get_db)):
     return store
 
 #Promo
-# @app.get("/promotionHeader/{promotionId}")
-# def get_promotion_header(promotionId: str, db: Session = Depends(get_db)):
-#     promoHeader = db.query(models.PromotionHeader).filter(models.PromotionHeader.promotionId == promotionId).first()
-#     if not promoHeader:
-#         raise HTTPException(status_code=404, detail="Promotion not found")
-#     promoDetails = db.query(models.PromotionDetails).filter(models.PromotionDetails.promotionId == promotionId).all()
-#     return {"promotion_header": promoHeader, "promotion_details": promoDetails}
 @app.get("/promotionHeader/{promotionId}")
 def get_promotion_header(promotionId: str, db: Session = Depends(get_db)):
     promoHeader = db.query(models.PromotionHeader).filter(models.PromotionHeader.promotionId == promotionId).first()
@@ -168,29 +145,7 @@ def create_promotion_header(promoHeader: PromotionHeaderSchema, db: Session = De
     db.refresh(db_promoHeader)
 
     return db_promoHeader
-# @app.post("/promotionHeader/", status_code=status.HTTP_201_CREATED)
-# def create_promotion_header(promoHeader:PromotionHeaderSchema, db: Session = Depends(get_db)):
-#     db_promoHeader = models.PromotionHeader(**promoHeader.dict())
-#     db.add(db_promoHeader)
-#     db.commit()
-#     db.refresh(db_promoHeader)
-#     return db_promoHeader
 
-# @app.post("/promotionHeader/", status_code=status.HTTP_201_CREATED)
-# def create_promotion_header(promoHeader:PromotionHeaderSchema, db: Session = Depends(get_db)):
-#     db_promoHeader = models.PromotionHeader(
-#         promotionId=promoHeader.promotionId,
-#         componentId=promoHeader.componentId,
-#         startDate=promoHeader.startDate,
-#         endDate=promoHeader.endDate,
-#         promotionType=promoHeader.promotionType,
-#         storeId=promoHeader.storeId
-
-#     )
-#     db.add(db_promoHeader)
-#     db.commit()
-#     db.refresh(db_promoHeader)
-#     return db_promoHeader
 
 @app.post("/promotionDetails/", status_code=status.HTTP_201_CREATED)
 def create_promotion_details(promoDetails: List[PromotionDetailsSchema], db: Session = Depends(get_db)):
@@ -207,448 +162,6 @@ def create_promotion_details(promoDetails: List[PromotionDetailsSchema], db: Ses
         db.refresh(db_promoDetails)
     return {"message": "Promotion details added successfully!"}
 
-# Database Functions
-# def get_valid_hierarchy_values(hierarchy_level: str) -> list:
-#     """Fetch valid values for a hierarchy level from itemsMaster"""
-#     column_map = {
-#         "department": "itemDepartment",
-#         "class": "itemClass",
-#         "subclass": "itemSubClass"
-#     }
-    
-#     if hierarchy_level.lower() not in column_map:
-#         return []
-    
-#     column = column_map[hierarchy_level.lower()]
-#     query = f"SELECT DISTINCT `{column}` FROM itemmaster"
-#     result = execute_mysql_query(query)
-#     return [str(row[column]) for row in result if row[column]]
-
-# def validate_items(item_ids: list) -> dict:
-#     """Validate item IDs against database"""
-#     if not item_ids:
-#         return {"valid": [], "invalid": []}
-    
-#     ids_str = ",".join([f"'{id.strip()}'" for id in item_ids])
-#     query = f"SELECT itemId FROM itemmaster WHERE itemId IN ({ids_str})"
-#     valid_ids = [row["itemId"] for row in execute_mysql_query(query)]
-#     invalid_ids = list(set(item_ids) - set(valid_ids))
-    
-#     return {"valid": valid_ids, "invalid": invalid_ids}
-
-# def validate_items_query(query: str) -> bool:
-#     diff_attributes = ['color', 'size', 'material']
-#     query_lower = query.lower()
-#     for attr in diff_attributes:
-#         if f'itemmaster.`{attr}`' in query_lower or f'where {attr} =' in query_lower:
-#             return False
-#     return True
-
-# def query_database_function_promo(question: str, db: Session) -> str:
-#     # Use the optimized function to extract attribute details (e.g., color, size, or material)
-#     attr, value, attr_id = find_attributes(question)
-#     # Now including 'storedetails' table
-#     tables = ["itemmaster", "itemsupplier", "itemdiffs", "storedetails"]
-#     tables_str = ", ".join(tables)
-    
-#     # If an attribute filter is detected, prepare an optimization hint to use direct equality.
-#     optimization_hint = ""
-#     if attr and value and attr_id:
-#         optimization_hint = (
-#             f"\n### **Optimization for Attribute Filtering:**\n"
-#             f"- Detected filter for {attr} with value '{value}'. Use direct equality checks with id {attr_id} "
-#             f"instead of subqueries, i.e., (im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id}).\n"
-#         )
-    
-#     promotion_sql_prompt = f"""
-#     You are a SQL assistant for fashion retail data. The following tables exist: {tables_str}.
-#     Generate a **pure SQL query** without explanations, comments, or descriptions.
-#     I have 4 tables in my database, namely:
-#     - `itemmaster` (aliased as `im`)  
-#     - `itemsupplier` (aliased as `isup`)  
-#     - `itemdiffs` (aliased as `idf`)
-#     - `storedetails` (for store information with columns: storeId, storeName, address, city, state, zipCode, phone)
-
-#     ### **Critical Rules:**  
-
-#     #### **1. Color, Size, and Material Filters**  
-#     - If the user searches for an **attribute** like **color, size, or material**, follow this strict process:  
-#       1. **Find the `id` in `itemdiffs`** where `diffType` matches the attribute (e.g., 'color') and `diffId` is the user-provided value (e.g., 'Red').  
-#       2. **Filter `itemmaster` (`im`)** by checking if the retrieved `idf.id` exists in **`im.diffType1`**, **`im.diffType2`**, or **`im.diffType3`**.  
-#       3. **NEVER** search for colors, sizes, or materials inside `itemmaster` directly.  
-
-#     #### **2. Allowed Tables Only**  
-#     - You may only use the following tables:  
-#     - `itemmaster` (Base Table):
-#         - **`itemId`**: Unique identifier for each item.  
-#         - **`itemDescription`**: Primary description of the item.  
-#         - **`itemSecondaryDescription`**: Additional details about the item.  
-#         - **`itemDepartment`**: The broader category an item belongs to (e.g., T-Shirt, Trousers, Jackets).  
-#         - **`itemClass`**: A classification within a department (e.g., Formals, Casuals, Leather).  
-#         - **`itemSubClass`**: A more granular classification under the item class (e.g., Full Sleeve, Half Sleeve, Zipper, Regular Fit).  
-#         - **`brand`**: The brand associated with the item (e.g., Zara, Adidas, H&M).  
-#         - **`diffType1`, `diffType2`, `diffType3`**: Foreign keys linking to `itemdiffs.id`, representing specific item attributes such as color, size, or material.   
-#     - `itemsupplier` (For Cost & Supplier Data):
-#         - **`id`**: Unique identifier for each supplier-item relationship.  
-#         - **`supplierCost`**: The cost of the item from the supplier.  
-#         - **`supplierId`**: The identifier for the supplier providing the item.  
-#         - **`itemId`**: Foreign key linking to `itemmaster.itemId`, establishing the relationship between items and suppliers.   
-#     - `itemdiffs` (For Attribute Filtering):
-#         - **`id`**: Unique identifier for each differentiation type.  
-#         - **`diffType`**: The attribute type used to differentiate items (e.g., color, size, material).  
-#         - **`diffId`**: The actual differentiation value corresponding to `diffType`.  
-#     - `storedetails` (For Store Information):
-#         - **`storeId`**: Unique identifier for each store.
-#         - **`storeName`**: The name of the store.
-#         - **`address`**: Street address of the store.
-#         - **`city`**: City where the store is located.
-#         - **`state`**: State where the store is located.
-#         - **`zipCode`**: ZIP code of the store's location.
-#         - **`phone`**: Contact phone number for the store.
-
-#     #### **3. Query Format & Execution**  
-#     - **Start queries from `itemmaster`** as the primary table.
-#     - Use **explicit JOINs** when needed (e.g., joining `itemsupplier` for cost-related queries).
-#     - **Return only valid SQL queries** without additional explanations or markdown formatting.
-#     - The generated SQL query should be fully structured and dynamically adapt to the user query.
-#     {optimization_hint}
-#     #### **4. Department Name Flexibility**
-#     - When filtering by `itemDepartment`, use the `LIKE` operator with a trailing wildcard `%` to match plural/singular forms. 
-#       For example, if the user specifies 'T-Shirts', use `im.itemDepartment LIKE 'T-Shirt%'`.
-#     ---
-#     ### **SQL Examples:**
-
-#     #### **Example 1: Select All Red Colored Items**
-#     User: "Select all red colored items"
-#     ```sql
-#     SELECT im.itemId
-#     FROM itemmaster im
-#     WHERE im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id}
-#     ```
-#     #### **Example 2: Select all red colored items with a supplier cost below $50**
-#     User: "Select all red colored items with a supplier cost below $50"
-#     ```sql
-#     SELECT im.itemId, isup.supplierCost
-#     FROM itemmaster im
-#     JOIN itemsupplier isup ON im.itemId = isup.itemId
-#     WHERE isup.supplierCost < 50
-#     AND (im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id})
-#     ```
-#     #### **Example 3: Select All Items of Size "Large"**
-#     User: "Select All Items of Size 'Large'"
-#     ```sql
-#     SELECT im.itemId
-#     FROM itemmaster im
-#     WHERE im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id})
-#     ```
-#     #### **Example 4: Select All Items from T-Shirts Department**
-#     User: "Select All Items from T-Shirts Department"
-#     ```sql
-#     SELECT im.itemId
-#     FROM itemmaster im
-#     WHERE im.itemDepartment LIKE 'T-Shirt%'
-#     ```
-#     """
-
-#     response = client.chat.completions.create(
-#         model="gpt-4o",
-#         messages=[
-#             {"role": "system", "content": promotion_sql_prompt},
-#             {"role": "user", "content": question}
-#         ],
-#         temperature=0.5,
-#         max_tokens=150
-#     )
-#     print("Query response:", response)
-#     mysql_query = response.choices[0].message.content.strip()
-#     mysql_query = mysql_query.replace("```sql", "").replace("```", "").strip()
-
-#     # Validate the generated SQL query
-#     if not mysql_query.lower().startswith(("select", "show")):
-#         return "Error: Generated response is not a valid SQL query."
-    
-#     try:
-#         result = execute_mysql_query(mysql_query)
-#         print("Query result:", result)
-#         return json.dumps(result, default=str)
-#     except Exception as e:
-#         print("Query error:", {str(e)})
-#         return f"Error executing query: {str(e)}"
-
-# def query_database_function_promo(question: str, db: Session) -> str:
-#     # Extract attribute details (e.g., color, size, or material)
-#     attr, value, attr_id = find_attributes(question)
-#     tables = ["itemmaster", "itemsupplier", "itemdiffs", "storedetails"]
-#     tables_str = ", ".join(tables)
-    
-#     optimization_hint = ""
-#     if attr and value and attr_id:
-#         optimization_hint = (
-#             f"\n### **Optimization for Attribute Filtering:**\n"
-#             f"- Detected filter for {attr} with value '{value}'. Use direct equality checks with id {attr_id} "
-#             f"instead of subqueries, i.e., (im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id}).\n"
-#         )
-    
-#     # Remove store validation from SQL prompt: Instead, use fetch_store_id_from_query to validate store details.
-#     store_ids = fetch_store_id_from_query(question, db)
-#     if not store_ids:
-#         return json.dumps({
-#             "validation": "failed", 
-#             "message": "Store validation failed: No matching store found in the database."
-#         })
-    
-#     # # Build a store filter condition using the validated store_ids.
-#     # store_filter_condition = f"AND EXISTS (SELECT 1 FROM storedetails sd WHERE sd.storeId IN ({', '.join([f'\'{s}\'' for s in store_ids])}))"
-    
-#     detail_validation_instructions = """
-#     #### **5. Validation of Promotion Details**
-#     - **Hierarchy Validation**: Check `itemmaster` (e.g., `im.itemDepartment LIKE 'T-Shirt%'`)
-#     - **Brand Validation**: Verify exact match in `itemmaster.brand`
-#     *Note: Store Validation is handled separately via fetch_store_id_from_query.*
-#     - If any of these validations fail, return explicit error messages.
-#     """
-    
-#     promotion_sql_prompt = f"""
-#     You are a SQL assistant for fashion retail data. The following tables exist: {tables_str}.
-#     Generate a **pure SQL query** without explanations, comments, or markdown formatting.
-#     The database has the following tables:
-#     - `itemmaster` (aliased as `im`)
-#     - `itemsupplier` (aliased as `isup`)
-#     - `itemdiffs` (aliased as `idf`)
-#     - `storedetails` (with columns: storeId, storeName, address, city, state, zipCode, phone)
-
-#     ### **Critical Rules:**
-    
-#     #### **1. Color, Size, and Material Filters**
-#     - For attributes like color, size, or material:
-#       1. Find the `id` in `itemdiffs` where `diffType` matches the attribute and `diffId` is the user-provided value.
-#       2. Filter `itemmaster` (`im`) by checking if the retrieved id exists in `im.diffType1`, `im.diffType2`, or `im.diffType3`.
-#       3. Do not search for these attributes directly in `itemmaster`.
-
-#     #### **2. Allowed Tables Only**
-#     - Use only the following tables and columns:
-#       - **itemmaster (im):** itemId, itemDescription, itemSecondaryDescription, itemDepartment, itemClass, itemSubClass, brand, diffType1, diffType2, diffType3.
-#       - **itemsupplier (isup):** id, supplierCost, supplierId, itemId.
-#       - **itemdiffs (idf):** id, diffType, diffId.
-#       - **storedetails:** storeId, storeName, address, city, state, zipCode, phone.
-
-#     #### **3. Query Format & Execution**
-#     - Start queries from `itemmaster` as the primary table.
-#     - Use explicit JOINs when needed.
-#     - Return only a valid SQL query without extra commentary.
-#     - The query must validate that the provided Hierarchy Value and Brand exist.
-    
-#     {optimization_hint}
-    
-#     #### **4. Department Name Flexibility**
-#     - When filtering by `itemDepartment`, use the LIKE operator with a trailing wildcard (e.g., `im.itemDepartment LIKE 'T-Shirt%'`).
-
-#     {detail_validation_instructions}
-#     ---
-#     ### **Task:**
-#     First, validate that:
-#       - The provided Hierarchy Value exists in `itemmaster` (e.g., `im.itemDepartment LIKE 'T-Shirt%'`).
-#       - The provided Brand exists in `itemmaster` (`brand` column).
-#     Then, if validations pass, generate a query to return item IDs for all yellow items from the FashionX Brand in the T-Shirt Department.
-#     # **Important:** Incorporate the following store filtering condition: {store_filter_condition}
-#     """
-    
-#     response = client.chat.completions.create(
-#         model="gpt-4o",
-#         messages=[
-#             {"role": "system", "content": promotion_sql_prompt},
-#             {"role": "user", "content": question}
-#         ],
-#         temperature=0.5,
-#         max_tokens=150
-#     )
-#     print("Query response:", response)
-#     mysql_query = response.choices[0].message.content.strip()
-#     mysql_query = mysql_query.replace("```sql", "").replace("```", "").strip()
-
-#     if not mysql_query.lower().startswith(("select", "show")):
-#         return "Error: Generated response is not a valid SQL query."
-    
-#     try:
-#         result = execute_mysql_query(mysql_query)
-#         print("Query result:", result)
-#         if not result:
-#             return json.dumps({
-#                 "validation": "failed", 
-#                 "message": "One or more fields did not validate. Please check Hierarchy Value or Brand."
-#             })
-        
-#         validation_failures = []
-#         for row in result:
-#             for key, value in row.items():
-#                 if "does not exist" in str(value).lower():
-#                     validation_failures.append(f"{key}: {value}")
-        
-#         if validation_failures:
-#             return json.dumps({
-#                 "validation": "failed", 
-#                 "message": "Validation failed for the following fields: " + "; ".join(validation_failures)
-#             })
-        
-#         return json.dumps(result, default=str)
-#     except Exception as e:
-#         print("Query error:", str(e))
-#         return f"Error executing query: {str(e)}"
- 
-# def query_database_function_promo(question: str, db: Session) -> str:
-#     # Use the optimized function to extract attribute details (e.g., color, size, or material)
-#     attr, value, attr_id = find_attributes(question)
-#     tables = ["itemmaster", "itemsupplier", "itemdiffs", "storedetails"]
-#     tables_str = ", ".join(tables)
-    
-#     optimization_hint = ""
-#     if attr and value and attr_id:
-#         optimization_hint = (
-#             f"\n### **Optimization for Attribute Filtering:**\n"
-#             f"- Detected filter for {attr} with value '{value}'. Use direct equality checks with id {attr_id} "
-#             f"instead of subqueries, i.e., (im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id}).\n"
-#         )
-#     store_ids = fetch_store_id_from_query(question, db)
-#     detail_validation_instructions = """
-#         #### **5. Validation of Promotion Details**
-#         - **Hierarchy Validation**: Check itemmaster for exact matches using LIKE with wildcard
-#         - **Brand Validation**: Verify exact match in itemmaster.brand
-#         - **Store Validation**: check {store_ids} for any store ids
-#         - Return explicit error messages for failed validations using:
-#         'Hierarchy Value does not exist', 'Brand does not exist', or 'Store does not exist'
-#         """
-
-
-#     # Modified SQL prompt with an explicit "Store Filtering" section:
-#     promotion_sql_prompt = f"""
-#     You are a SQL assistant for fashion retail data. The following tables exist: {tables_str}.
-#     Generate a **pure SQL query** without explanations, comments, or markdown formatting.
-#     I have 4 tables in my database, namely:
-#     - itemmaster (aliased as im)
-#     - itemsupplier (aliased as isup)
-#     - itemdiffs (aliased as idf)
-#     - storedetails (with columns: storeId, storeName, address, city, state, zipCode, phone)
-
-#     ### **Critical Rules:**
-    
-#     #### **1. Color, Size, and Material Filters**
-#     - For attributes like color, size, or material:
-#       1. Find the id in itemdiffs where diffType matches the attribute and diffId is the user-provided value.
-#       2. Filter itemmaster (im) by checking if the retrieved id exists in im.diffType1, im.diffType2, or im.diffType3.
-#       3. Do not search for these attributes directly in itemmaster.
-
-#     #### **2. Allowed Tables Only**
-#     - Use only the following tables and columns:
-#       - **itemmaster (im):** itemId, itemDescription, itemSecondaryDescription, itemDepartment, itemClass, itemSubClass, brand, diffType1, diffType2, diffType3.
-#       - **itemsupplier (isup):** id, supplierCost, supplierId, itemId.
-#       - **itemdiffs (idf):** id, diffType, diffId.
-#       - **storedetails:** storeId, storeName, address, city, state, zipCode, phone.
-
-#     #### **3. Query Format & Execution**
-#     - Start queries from itemmaster as the primary table.
-#     - Use explicit JOINs when needed.
-#     - Return only a valid SQL query without extra commentary.
-#     - The query must first validate that the provided Hierarchy Value, Brand, and Store(s) exist.
-    
-#     {optimization_hint}
-    
-#     #### **4. Department Name Flexibility**
-#     - When filtering by itemDepartment, use the LIKE operator with a trailing wildcard (%) (e.g., if 'T-Shirts' is provided, use im.itemDepartment LIKE 'T-Shirt%').
-
-#     {detail_validation_instructions}
-#     ---
-#     ### **Task:**
-#     First, validate that:
-#     - The provided Hierarchy Value exists in itemmaster (e.g., im.itemDepartment LIKE 'T-Shirt%').
-#     - The provided Brand exists in itemmaster (brand column).
-#     - The provided Store exists in storedetails {store_ids}.
-#     Next, process the user's query.
-    
-#     ### **SQL Examples:**
-
-#     #### **Example 1: Select All Red Colored Items**
-#     User: "Select all red colored items"
-#     ```sql
-#     SELECT im.itemId
-#     FROM itemmaster im
-#     WHERE im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id}
-#     ```
-#     #### **Example 2: Select all red colored items with a supplier cost below $50**
-#     User: "Select all red colored items with a supplier cost below $50"
-#     ```sql
-#     SELECT im.itemId, isup.supplierCost
-#     FROM itemmaster im
-#     JOIN itemsupplier isup ON im.itemId = isup.itemId
-#     WHERE isup.supplierCost < 50
-#     AND (im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id})
-#     ```
-#     #### **Example 3: Select All Items of Size "Large"**
-#     User: "Select All Items of Size 'Large'"
-#     ```sql
-#     SELECT im.itemId
-#     FROM itemmaster im
-#     WHERE im.diffType1 = {attr_id} OR im.diffType2 = {attr_id} OR im.diffType3 = {attr_id})
-#     ```
-#     #### **Example 4: Select All Items from T-Shirt Department**
-#     User: "Select All Items from T-Shirts Department"
-#     ```sql
-#    IF EXISTS (
-#     SELECT 1 FROM department WHERE departmentName LIKE 'T-Shirt%'
-#     )
-#     BEGIN
-#         SELECT im.itemId
-#         FROM itemmaster im
-#         WHERE im.itemDepartment LIKE 'T-Shirt%'
-#     END
-#     ```
-    
-#     """
-    
-#     response = client.chat.completions.create(
-#         model="gpt-4o",
-#         messages=[
-#             {"role": "system", "content": promotion_sql_prompt},
-#             {"role": "user", "content": question}
-#         ],
-#         temperature=0.5,
-#         max_tokens=150
-#     )
-#     print("Query response:", response)
-#     mysql_query = response.choices[0].message.content.strip()
-#     mysql_query = mysql_query.replace("```sql", "").replace("```", "").strip()
-
-#     if not mysql_query.lower().startswith(("select", "show")):
-#         return "Error: Generated response is not a valid SQL query."
-    
-#     try:
-#         result = execute_mysql_query(mysql_query)
-#         print("Query result:", result)
-        
-#         if not result:
-#             return json.dumps({
-#                 "validation": "failed", 
-#                 "message": "One or more fields did not validate. Please check Hierarchy Value, Brand, or Stores."
-#             })
-        
-#         validation_failures = []
-#         for row in result:
-#             for key, value in row.items():
-#                 if "does not exist" in str(value).lower():
-#                     validation_failures.append(f"{key}: {value}")
-        
-#         if validation_failures:
-#             return json.dumps({
-#                 "validation": "failed", 
-#                 "message": "Validation failed for the following fields: " + "; ".join(validation_failures)
-#             })
-        
-#         return json.dumps(result, default=str)
-#     except Exception as e:
-#         print("Query error:", str(e))
-#         return f"Error executing query: {str(e)}"
-
-# Configure logging to output debug messages.
-
 logging.basicConfig(level=logging.INFO)
 # logger = logging.getLogger(__name__)
 def fetch_store_id_from_query(store_query: str, db: Session) -> list:
@@ -656,100 +169,6 @@ def fetch_store_id_from_query(store_query: str, db: Session) -> list:
     Extract and fetch store ID(s) from the storedetails table based on the provided store_query.
     The store_query can be a store ID (e.g., "STORE001") or contain details like a city or state.
     """
-    # store_sql_prompt = f"""
-    # You are a SQL assistant for retail store data. The storedetails table has the following columns. Use only these columns for the query:
-    #   - storeId
-    #   - storeName
-    #   - address
-    #   - city
-    #   - state
-    #   - zipCode
-    #   - phone
-
-    # Based on the following store query: "{store_query}"
-    # ### **Query Generation Rules:**
-    # 1. **Return ONLY the `storeId` column.**
-    # 2. **Filtering Priorities (From Most to Least Specific)**:
-    # a. If an explicit store ID is mentioned (e.g., "STORE001"), match directly using `storeId`.
-    # b. If a city, state, or address is mentioned (e.g., "New Delhi"), filter accordingly.
-    # c. If a phone number or zip code is provided, filter using those.
-    # d. Use `LIKE` for text-based matches to handle partial names.
-
-    # ### **Special Cases:**
-    # - **If the query explicitly asks for "all stores"** (e.g., "Select all stores", "Get all store IDs"), return all store IDs:
-    # ```sql
-    # SELECT sd.storeId FROM storedetails sd
-    # If the query is ambiguous or a system-generated prompt (e.g., "Stores: Please provide store locations"), return an empty response.
-
-    # If only the word "Stores" is detected without context, return an empty response.
-
-    # ### **SQL Examples:**
-
-    # #### **Example 1: Specific Store Query**
-    # User: "Select all stores in New Delhi"
-    # ```sql
-    # Copy
-    # SELECT sd.storeId
-    # FROM storedetails sd
-    # WHERE sd.city = 'Delhi'
-    # ```
-    # #### **Example 2: Select All Items with 30% off from the FashionX Brand in the T-Shirt Department at STORE005
-    # User: "Create a promotion offering 30% off all yellow items from the FashionX Brand in the T-Shirt Department at STORE005, valid from 16/04/2025 until the end of May 2025."
-
-    # ```sql
-    # SELECT sd.storeId
-    # FROM storedetails sd
-    # WHERE sd.storeId = 'STORE005'
-    # ```
-    # #### **Example 3: Select all stores with storeId STORE006
-    # User: "stores: STORE006"
-
-    # ```sql
-    # SELECT sd.storeId
-    # FROM storedetails sd
-    # WHERE sd.storeId = 'STORE006'
-    # ```
-    # #### **Example 4: Select Stores for a Promotion with Specific Criteria where Stores: STORE007
-    # User: "Promotion Type: Simple, Hierarchy Type: Sub Class, Hierarchy Value: Full Sleeve, Brand: H&M, Items: ITEM001, ITEM002, Discount Type: % Off, Discount Value: 10, Start Date: 13/02/2025, End Date: 31/05/2025, Stores: STORE007"
-
-    # ```sql
-    # SELECT sd.storeId
-    # FROM storedetails sd
-    # WHERE sd.storeId = 'STORE007'
-    # ```
-    
-    # #### **Example 5: Select Stores for a Buy One Get One Promotion where Store Id is STORE008
-    # User: "Simple, Class, Casuals, H&M, ITEM002, ITEM005, Buy One Get One Free, 0, 13/02/2025, 31/05/2025, STORE008"
-    # ```sql
-    # SELECT sd.storeId
-    # FROM storedetails sd
-    # WHERE sd.storeId = 'STORE008'
-    # ```
-    
-    # #### **Example 6: All Stores Query
-    # User: "Select All stores"
-    # ```sql
-    # SELECT sd.storeId
-    # FROM storedetails sd
-    # ```
-    
-    # #### **Example 7: Ambiguous mention
-    # User: "Recorded Details:
-    # Promotion Type: Simple
-    # Hierarchy Type: Class
-    # Hierarchy Value: Casuals
-    # Brand: H&M
-    # Items: ITEM002, ITEM005
-    # Discount Type: Buy One Get One Free
-    # Discount Value: 0
-    # Start Date: 13/02/2025
-    # End Date: 31/05/2025
-    # Missing Fields:
-    # Stores: Please provide store locations or regions."
-    
-    # Action: Since no explicit instruction is mentioned, do not generate any SQL query (return empty response).
-    # """
-    
     store_sql_prompt = f"""
     You are a SQL assistant for retail store data. The storedetails table has the following columns. Use only these columns for the query:
       - storeId
@@ -900,6 +319,12 @@ def extract_promo_entities(question: str, db: Session) -> dict:
     - storedetails: storeId, storeName, address, city, state, zipCode, phone
     """
     try:
+        store_ids = fetch_store_id_from_query(question, db)
+        logging.info("Fetched Store IDs: %s", store_ids)
+    except Exception as e:
+        logging.error("Error fetching store IDs: %s", e)
+        store_ids = [] # Default to empty list on error
+    try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -910,7 +335,7 @@ def extract_promo_entities(question: str, db: Session) -> dict:
             temperature=0.0
         )
         entities = json.loads(response.choices[0].message.content)
-        store_ids =  fetch_store_id_from_query(question, db)
+        # store_ids =  fetch_store_id_from_query(question, db)
         logging.info("Question in promo entity: %s, %s", question, entities)  
         #if store is found call fetch store function
 
@@ -976,9 +401,6 @@ def extract_promo_entities(question: str, db: Session) -> dict:
         }
 
 def query_database_function_promo(question: str, db: Session) -> str:
-    # Extract promo entities (which now includes validation)
-    # promo_entities = extract_promo_entities(question, db)
-    # logging.info("Promo entities with validation: %s", promo_entities)
     attr, value, attr_id = find_attributes(question)
     
     tables = ["itemmaster", "itemsupplier", "itemdiffs", "storedetails"]
@@ -1229,53 +651,6 @@ def detect_attribute(question: str, attribute_map: Dict) -> Tuple[Optional[str],
         print(f"Detection error: {e}")
         return (None, None)
 
- 
-# def detect_attribute(question: str, attribute_map: Dict) -> Tuple[Optional[str], Optional[str]]:
-# # Instantiate the LLM using the latest ChatOpenAI interface
-#     """Optimized attribute detection with caching."""
-#     if not attribute_map:
-#         return (None, None)
-
-#     try:
-#         # Build prompt from pre-loaded data
-#         attr_desc = "\n".join(
-#             f"- {attr}: {', '.join(values)}" 
-#             for attr, values in attribute_map.items()
-#         )
-
-#         prompt = f"""Analyze query: "{question}"
-#         Identify attributes from:
-#         {attr_desc}
-#         Respond in JSON format: {{"attribute": "...", "value": "..."}}"""
-
-#         response = client.chat.completions.create(
-#             model="gpt-4o",
-#             messages=[{
-#                 "role": "system",
-#                 "content": "You are a retail data analyst. Identify product attributes."
-#             }, {
-#                 "role": "user", 
-#                 "content": prompt
-#             }],
-#             response_format={"type": "json_object"},
-#             temperature=0.1
-#         )
-
-#         result = json.loads(response.choices[0].message.content)
-#         attr = result.get('attribute')
-#         value = result.get('value')
-
-#         # Validate against known data
-#         if not attribute_map.get(attr, {}).get(value):
-#             print(f"Invalid detection: {attr}/{value}")
-#             return (None, None)
-
-#         return (attr, value)
-
-#     except Exception as e:
-#         print(f"Detection error: {e}")
-#         return (None, None)
-
 llm_gpt4 = ChatOpenAI(model_name="gpt-4-turbo", temperature=0.7)
 response_cache = {}  # In-memory cache keyed by conversation hash
 user_promo_details={}
@@ -1386,305 +761,6 @@ def apply_lcel(chain, lcel_expression):
     # For now, return the chain unchanged
     return chain
 
-# --- Modified handle_promotion_chat Endpoint ---
-# @app.post("/promo-chat")
-# async def handle_promotion_chat(request: dict):
-#     """
-#     Updated promo-chat endpoint that integrates:
-#       • Advanced prompt engineering, memory management, LCEL, caching, and async execution.
-#       • Original function calling for database queries.
-#       • Query classification via the classify_query function.
-#     """
-#     user_id = request.get("user_id")
-#     user_message = request.get("message")
-#     if not user_id or not user_message:
-#         raise HTTPException(status_code=400, detail="Missing user_id or message")
-    
-#     # Initialize user session state if needed
-#     if user_id not in promo_states:
-#         promo_states[user_id] = []
-#         user_promo_details[user_id] = DEFAULT_PROMO_STRUCTURE.copy()
-#         conversation_memory[user_id] = ConversationBufferWindowMemory(
-#             k=10,
-#             return_messages=True,
-#             input_key="input",
-#             output_key="output"
-#         )
-    
-#     # Append user message and update conversation text
-#     promo_states[user_id].append(f"User: {user_message}")
-#     conversation_text = "\n".join(promo_states[user_id])
-#     conversation_memory[user_id].save_context({"input": user_message}, {"output": ""})
-    
-#     # Create a cache key based on the conversation text
-#     conversation_hash = hashlib.md5(conversation_text.encode("utf-8")).hexdigest()
-#     if conversation_hash in response_cache:
-#         return response_cache[conversation_hash]
-    
-#     # --- New Advanced Prompt Template & Memory ---
-#     system_prompt_template = PromptTemplate(
-#         input_variables=["current_date", "chat_history"],
-#         template=(
-#             "You are ExpX, a smart promotion assistant.\n"
-#             "Today is {current_date}. Use the following conversation history to generate an efficient and cost-effective response.\n"
-#             "Conversation History:\n{chat_history}\n\n"
-#             "Leverage the following advanced LLM techniques:\n"
-#             "• Prompt Templates & Prompt Engineering\n"
-#             "• Chains & Modular Workflow Composition\n"
-#             "• Memory Management\n"
-#             "• Retrieval-Augmented Generation (RAG)\n"
-#             "• Output Parsing & Structured Output\n"
-#             "• Tool & Function Calling\n"
-#             "• Agents & Dynamic Decision-Making\n"
-#             "• Callbacks & Streaming\n"
-#             "• Text Splitting Techniques\n"
-#             "• Few-Shot Prompting & Example Selection\n"
-#             "• Parallel Execution & Asynchronous Processing\n"
-#             "• Caching & Token Management\n"
-#             "• LangChain Expression Language (LCEL)\n\n"
-#             "Respond concisely and in a structured format."
-#         )
-#     )
-#     current_date = datetime.today().strftime("%d/%m/%Y")
-#     system_prompt = system_prompt_template.format(current_date=current_date, chat_history=conversation_text)
-    
-#     # Optionally split conversation if needed
-#     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-#     _ = text_splitter.split_text(conversation_text)  # Not used directly here
-    
-#     # --- First, run the advanced LLM chain with caching & LCEL ---
-#     with get_openai_callback() as callback:
-#         # Define an LLMChain with memory management
-#         # llm_chain = LLMChain(
-#         #     llm=llm_gpt4,
-#         #     prompt=PromptTemplate(
-#         #         input_variables=["chat_history"],
-#         #         template="Given the following conversation history, generate an accurate promotion response:\n{chat_history}\nRespond concisely."
-#         #     ),
-#         #     memory=conversation_memory[user_id]
-#         # )
-#         prompt = PromptTemplate(
-#             input_variables=["input", "chat_history"],
-#             template="Given the following conversation history, generate an accurate promotion response:\n{chat_history}\nNew Input: {input}\nRespond concisely."
-#         )
-#         llm_chain = (
-#             RunnablePassthrough.assign(
-#                 chat_history=lambda x: conversation_memory[user_id].load_memory_variables(x)["history"]
-#             )
-#             | prompt
-#             | llm_gpt4
-#             | StrOutputParser()
-#         )
-#         # Apply LCEL configuration (placeholder)
-#         lcel_expression = "parallelize(chain, async=True, retry=2)"
-#         llm_chain = apply_lcel(llm_chain, lcel_expression)
-#         # chain_response = await llm_chain.ainvoke(input={"chat_history": conversation_text})
-#         chain_response = await llm_chain.ainvoke({"input": user_message})
-#         bot_reply = chain_response 
-    
-#     bot_reply = chain_response
-#     conversation_memory[user_id].save_context({"input": ""}, {"output": bot_reply})
-#     promo_states[user_id].append(f"Bot: {bot_reply}")
-    
-#     # --- Append Original Function Calling Logic ---
-#     # Build messages using the original template_Promotion
-#     messages_fc = [
-#         {"role": "system", "content": template_Promotion},
-#         {"role": "user", "content": conversation_text}
-#     ]
-#     functions = [{
-#         "name": "query_database",
-#         "description": "Execute database queries for validation/data retrieval",
-#         "parameters": {
-#             "type": "object",
-#             "properties": {
-#                 "question": {
-#                     "type": "string",
-#                     "description": "Natural language question requiring database data"
-#                 }
-#             },
-#             "required": ["question"]
-#         }
-#     }]
-#     # Invoke function calling via the LLM (if applicable)
-#     try:
-#         fc_response = await llm_gpt4.agenerate(
-#             messages=messages_fc,
-#             functions=functions,
-#             function_call="auto",
-#             temperature=0.7,
-#             max_tokens=500
-#         )
-#         fc_message = fc_response["choices"][0]["message"]
-#         query_called = False
-#         if "function_call" in fc_message and fc_message["function_call"]:
-#             args = json.loads(fc_message["function_call"]["arguments"])
-#             db_session = next(get_db())
-#             query_result = query_database_function_promo(args["question"], db_session)
-#             query_called = True
-#             messages_fc.append({
-#                 "role": "function",
-#                 "name": "query_database",
-#                 "content": query_result
-#             })
-#             second_response = await llm_gpt4.agenerate(
-#                 messages=messages_fc,
-#                 temperature=0.7,
-#                 max_tokens=500
-#             )
-#             bot_reply = second_response["choices"][0]["message"]["content"]
-#     except Exception as e:
-#         logging.error("Error during function calling: %s", e)
-#         query_called = False
-
-#     # --- Classify the Query using the classify_query function ---
-#     classification_result = await classify_query(user_message, conversation_text)
-    
-#     # --- Extract structured promotion details (simulate async extraction) ---
-#     try:
-#         promo_json = await categorize_promo_details_fun_call(bot_reply, user_id)
-#     except Exception as e:
-#         promo_json = user_promo_details[user_id]
-    
-#     # Determine submission status from bot reply content
-#     if "Would you like to submit" in bot_reply:
-#         submissionStatus = "pending"
-#     elif "Promotion created successfully" in bot_reply:
-#         submissionStatus = "submitted"
-#     elif "I want to change something" in bot_reply:
-#         submissionStatus = "cancelled"
-#     else:
-#         submissionStatus = "in_progress"
-    
-#     response_data = {
-#         "user_id": user_id,
-#         "bot_reply": bot_reply,
-#         "chat_history": promo_states[user_id],
-#         "promo_json": promo_json,
-#         "submissionStatus": submissionStatus,
-#         "query_called": query_called,
-#         "classification_result": classification_result,
-#         "callback_details": str(callback)
-#     }
-    
-#     # Cache the response for future identical conversation contexts
-#     response_cache[conversation_hash] = response_data
-#     return response_data
-
-# @app.post("/promo-chat")
-# async def handle_promotion_chat(request: ChatRequest):
-#     user_id = request.user_id
-#     user_message = request.message
-
-#     if user_id not in promo_states:
-#         promo_states[user_id] = []
-#         user_promo_details[user_id] = DEFAULT_PROMO_STRUCTURE.copy()
-    
-#     promo_states[user_id].append(f"User: {user_message}")
-#     conversation = "\n".join(promo_states[user_id])
-    
-#     try:
-#         messages = [
-#             {"role": "system", "content": template_Promotion},
-#             {"role": "user", "content": conversation}
-#         ]
-#         functions = [{
-#             "name": "query_database",
-#             "description": "Execute database queries for validation/data retrieval",
-#             "parameters": {
-#                 "type": "object",
-#                 "properties": {
-#                     "question": {
-#                         "type": "string", 
-#                         "description": "Natural language question requiring database data"}
-#                 },
-#                 "required": ["question"]
-#             }
-#         }]
-
-#         response = client.chat.completions.create(
-#             model="gpt-4o",
-#             messages=messages,
-#             functions=functions,
-#             function_call="auto",
-#             temperature=0.7,
-#             max_tokens=500
-#         )
-#         response_message = response.choices[0].message
-#         content_text = response_message.content
-#         bot_reply = response_message.content
-#         function_call = response_message.function_call
-#         query_called = False
-
-#         if function_call and function_call.name == "query_database":
-#             args = json.loads(function_call.arguments)
-#             db = next(get_db())
-#             query_result = query_database_function_promo(args["question"], db)
-#             query_called = True
-
-#             messages.append({
-#                 "role": "function", 
-#                 "name": "query_database",
-#                 "content": query_result
-#             })
-#             promo_argument = content_text
-#             print("Query result",query_result)
-#             print("messages: ",messages)
-#             print("argument",promo_argument)
-#             try:
-#                 promo_entities = extract_promo_entities(promo_argument, db)
-#                 logging.info("promo_entities success: %s",promo_entities)
-#                 # promo_entities = extract_promo_entities(user_message, db)
-#                 # logging.info("promo_entities success: %s",promo_entities)
-
-#             except Exception as e:
-#                 logging.error("Entity extraction failed: %s", str(e))
-#                 promo_entities = {
-#                     'error': str(e),
-#                     'validation': {'errors': [str(e)]}
-#                 }
-            
-#             messages.append({
-#                 "role": "function", 
-#                 "name": "entity_extraction_and_validation",
-#                 "content": json.dumps(promo_entities) 
-#             })
-
-#             second_response = client.chat.completions.create(
-#                 model="gpt-4o",
-#                 messages=messages,
-#                 temperature=0.7,
-#                 max_tokens=500
-#             )
-#             bot_reply = second_response.choices[0].message.content
-
-#         user_promo_details[user_id] = await categorize_promo_details(bot_reply, user_id)
-#         promo_json = user_promo_details[user_id]
-#         classification_result = classify_query(user_message, conversation)
-
-#         promo_states[user_id].append(f"Bot: {bot_reply}")
-
-#         submissionStatus = "in_progress"
-#         if "Would you like to submit" in bot_reply:
-#             submissionStatus = "pending"
-#         elif "Promotion created successfully" in bot_reply:
-#             submissionStatus = "submitted"
-#         elif "I want to change something" in bot_reply:
-#             submissionStatus = "cancelled"
-
-#         return {
-#             "user_id": user_id,
-#             "bot_reply": bot_reply,
-#             "chat_history": promo_states,
-#             "promo_json": promo_json,
-#             "submissionStatus": submissionStatus,
-#             "query_called": query_called,
-#             "classification_result": classification_result
-#         }
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/promo-chat")
 async def handle_promotion_chat(request: dict):
     # Assuming request has keys "user_id" and "message"
@@ -1782,10 +858,27 @@ async def handle_promotion_chat(request: dict):
                     'validation': {'errors': [str(e)]}
                 }
             
+            # Merge the validated store IDs into the promo argument.
+            # Attempt to parse the original promo_argument as JSON.
+            try:
+                promo_dict = json.loads(promo_argument)
+            except Exception as e:
+                # If parsing fails, create a dict with the original promo_argument.
+                promo_dict = {"query": promo_argument}
+            
+            # Override the "Stores" field with the validated store IDs
+            promo_dict["Stores"] = promo_entities.get("Stores", promo_dict.get("Stores"))
+            # Optionally, include validation details as well.
+            promo_dict["validation"] = promo_entities.get("validation", {})
+            
+            # Convert the updated promo details back to JSON string.
+            updated_promo_argument = json.dumps(promo_dict)
+            
+            # Append the updated promo details to the conversation
             messages.append({
                 "role": "function", 
                 "name": "entity_extraction_and_validation",
-                "content": json.dumps(promo_entities) 
+                "content": updated_promo_argument
             })
 
             # Optionally, you can make a third API call if needed to incorporate validation:
