@@ -54,8 +54,9 @@ Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline yo
 - **Promotion Type**: (Simple, Buy X/Get Y, Threshold, Gift With Purchase)  
 - **Hierarchy Level**:  
   - Type: [Department | Class | Sub Class] 
-  - Value: Enter the value for the selected hierarchy type  
-- **Brand**: Enter the product brand (e.g., FashionX, H&M, Zara, Uniqlo)  
+  - Value: Enter the value for the selected hierarchy type (You can enter multiple values separated by commas, for example: "T-Shirt, Shirt")  
+  - **Mixed Hierarchy Predicate Example**: If you wish to combine different hierarchy conditions (for example, Class=Casuals and Department=T-Shirt), please specify each field accordingly.  
+- **Brand**: Enter the product brand (e.g., FashionX, H&M, Zara, Uniqlo). You may specify multiple brands separated by commas (e.g., "FashionX, Zara").  
 - **Items**:  
    - Comma-separated SKUs/Item IDs (e.g., ITEM001, ITEM003) **OR** a natural language query  
    - Exclusions: SKUs/Item IDs or styles to exclude (Optional Detail)  
@@ -134,6 +135,7 @@ Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline yo
             1. Display extracted store IDs along with their validation status (✅/❌).  
             2. Provide alternatives for invalid entries.  
         - Block promotion submission until store validation passes.
+
         
 5. **Date Validation**  
    - Ensure that the start date is equal to or greater than {current_date}.
@@ -236,7 +238,7 @@ Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline yo
 *User:* "Add the items ITEM005 and ITEM006",
 *Response:* Append the given items to the item list and validate this new data. Provide a validation error in case of validation failure.  
 
-### *Scenario 12: Exclusions* 
+### *Scenario 13: Exclusions* 
 *User:* "Excluded Stores are STORE002 and STORE003 and Excluded Items are ITEM003,ITEM004",
 *Response:*
 Recorded Details:
@@ -244,7 +246,7 @@ Excluded Stores:STORE002 , STORE003
 Excluded Items: ITEM003,ITEM004
 *Validate inputs, ensure correct formats, and provide a structured summary*
 
-### *Scenario 13: All items* 
+### *Scenario 14: All items* 
 *User:* "Create a promotion on all items"
 *Action:* Trigger the `query_database` function call and return the received store ids
 *Response:*
@@ -253,7 +255,7 @@ Items: ITEM003,ITEM004
 ...other fields.
 *Validate inputs, ensure correct formats, and provide a structured summary*
 
-### *Scenario 13: All stores* 
+### *Scenario 15: All stores* 
 *User:* "Create a promotion across all stores"
 *Action:* Trigger the 'extract_promo_entities' function call and return the received store ids
 *Response:*
@@ -263,7 +265,7 @@ Items: ITEM003,ITEM004
 ...other fields.
 *Validate inputs, ensure correct formats, and provide a structured summary*
 
-### *Scenario 13: Add both items and stores* 
+### *Scenario 16: Add both items and stores* 
 *User:* "Create simple promotion for all items across all stores."
 *Action:* Trigger the `query_database` function call which in turn calls the 'extract_promo_entities' function and return the received item ids and store ids
 *Response:*
@@ -273,7 +275,71 @@ Items: ITEM003,ITEM004
 ...other fields.
 *Validate inputs, ensure correct formats, and provide a structured summary*
 
-
+### *Scenario 17: Multiple Predicates for a Single Field* 
+- **Multiple Brands:**  
+    User: "Select all items from FashionX and Zara brands"
+    *Response:*  
+    Recorded Details:
+    Brand: FashionX, Zara
+    Items: (Populated from SQL query result)
+    Final SQL Query:  
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.brand = 'FashionX' OR im.brand = 'Zara'
+    ```
+- **Multiple Departments:**  
+    User: "Select all items from T-Shirt and Shirt departments"  
+    *Response:*  
+    Recorded Details:
+    Hierarchy Type: Department
+    Hierarchy Value: T-Shirt, Shirt
+    Items: (Populated from SQL query result)
+    Final SQL Query: 
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.itemDepartment LIKE 'T-Shirt%' OR im.itemDepartment LIKE 'Shirt%'
+    ```
+- **Multiple Sub Classes:**  
+    User: "Select all items from Half and Full Sleeve Sub Classes"  
+    *Response:* 
+    Recorded Details:
+    Hierarchy Type: Sub Class 
+    Hierarchy Value: Half Sleeve, Full Sleeve
+    Items: (Populated from SQL query result) 
+    Final SQL Query: 
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.itemSubClass LIKE 'Half Sleeve%' OR im.itemSubClass LIKE 'Full Sleeve%'
+    ```
+- **Multiple Classes:**  
+    User: "Select all items from Formals and Casuals Classes"  
+    *Response:* 
+    Recorded Details:
+    Hierarchy Type: Class 
+    Hierarchy Value: Formals, Casuals
+    Items: (Populated from SQL query result)  
+    Final SQL Query:  
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.itemClass LIKE 'Formals%' OR im.itemClass LIKE 'Casuals%'
+    ```
+### *Scenario 17: Mixed Hierarchy Conditions* 
+    User: "Select all items from T-Shirt department and Casuals class" 
+    *Response:*  
+    Recorded Details:
+    Hierarchy Type: Department, Class
+    Hierarchy Value: T-Shirt, Casuals
+    Items: (Populated from SQL query result)  
+    Final SQL Query:  
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.itemDepartment LIKE 'T-Shirt%' AND im.itemClass LIKE 'Casuals%'
+    ```
 ---  
 
 *Current Promotion Details*:  
@@ -504,17 +570,17 @@ today = datetime.datetime.today().strftime("%d/%m/%Y")
 template_Promotion=template_Promotion_without_date.replace("{current_date}", today)
 DEFAULT_PROMO_STRUCTURE = {
   "Promotion Type": "",
-  "Hierarchy Type": "" ,
-  "Hierarchy Value": "",
-  "Brand": "" ,
+  "Hierarchy Type": [] ,
+  "Hierarchy Value": [],
+  "Brand": [] ,
   "Items": [] ,
-  "Excluded Items":[]  ,
+  "Excluded Item List":[]  ,
   "Discount Type": "",
   "Discount Value":""  ,
   "Start Date": "" ,
   "End Date": "",
   "Stores":  [],
-  "Excluded Stores":[] 
+  "Excluded Location List":[] 
 
 }
 previous_promo_details = defaultdict(dict)
@@ -798,9 +864,9 @@ Extract the following promotion details from the provided text and for each fiel
 The fields and their expected formats are:
   
   - **Promotion Type**: one of [Simple | Buy X/Get Y | Threshold | GWP (Gift with Purchase)]
-  - **Hierarchy Type**: one of [Department | Class | Sub Class]
-  - **Hierarchy Value**: The specific value for the selected Hierarchy Type (e.g., for Department, "T-Shirt")
-  - **Brand**: Product brand (e.g., FashionX, H&M, Zara, Uniqlo)
+  - **Hierarchy Type**:  An array containing one or more of the following: [Department, Class, Sub Class]
+  - **Hierarchy Value**: An array of one or more specific values for the selected Hierarchy Type (e.g., for Department, ["T-Shirt", "Shirt"])
+  - **Brand**: An array of product brands (e.g., ["FashionX", "H&M", "Zara", "Uniqlo"])
   - **Items**: Array of SKUs/Item IDs formatted as ['ITEM001', 'ITEM002']
   - **Excluded Items**: Array of SKUs/Item IDs formatted as ['ITEM003', 'ITEM004']
   - **Discount Type**: one of [% Off | Fixed Price | Buy One Get One Free]

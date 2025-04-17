@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from typing import Dict, List, Optional, TypedDict, Annotated, Sequence, AsyncIterator # Typing for state, tools, and streaming
 import operator
 import traceback # For detailed error logging
-
+from langchain_core.output_parsers import StrOutputParser 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import (
     HumanMessage,
@@ -54,50 +54,6 @@ class ExtractedPromotionDetails(BaseModel):
     class Config:
         populate_by_name = True # Allows using field names as well as aliases
         extra = 'ignore' # Ignore extra fields the LLM might hallucinate
-
-
-# @tool(args_schema=PromotionDetails)
-# def validate_promotion_details(
-#     # ... (Tool function definition remains the same)
-#     promotion_type: str,
-#     discount_type: str,
-#     discount_value: float,
-#     start_date: str,
-#     end_date: str,
-#     stores_query: str,
-#     hierarchy_level_type: str | None = None,
-#     hierarchy_level_value: str | None = None,
-#     brand: str | None = None,
-#     items_query: str | None = None,
-#     item_exclusions: str | None = None,
-#     store_exclusions: str | None = None,
-# ) -> str:
-#     """
-#     Validates the provided promotion details against the database.
-#     Checks for conflicts, invalid SKUs/stores, date issues, etc.
-#     Returns 'Valid' or a description of the validation error(s).
-#     """
-#     print(f"--- Tool Called: validate_promotion_details ---")
-#     print(f"Received details: {locals()}")
-
-#     # --- !!! Placeholder Database Logic !!! ---
-#     errors = []
-#     if items_query and "INVALID_SKU" in items_query:
-#         errors.append("Invalid SKU detected in items query.")
-#     if start_date == end_date:
-#         errors.append("Start and end dates cannot be the same.")
-#     # --- End Placeholder ---
-
-#     if errors:
-#         validation_result = f"Invalid: {'; '.join(errors)}"
-#     else:
-#         validation_result = "Valid"
-
-#     print(f"Validation result: {validation_result}")
-#     print(f"--- Tool Execution Finished ---")
-#     return validation_result
-
-# tools = [validate_promotion_details]
 
 # --- LangChain/LangGraph Setup ---
 # Ensure model is initialized with streaming=True
@@ -222,6 +178,163 @@ You are an expert extraction system. Analyze the provided text, which is a respo
         traceback.print_exc()
         return None
     
+# --- Database Schema Definition ---
+# Define the schema clearly for the LLM
+TABLE_SCHEMA = """
+Database Schema:
+
+1. `itemmaster` (Alias: im) (Base Table for Item Details):
+   - `itemId` (VARCHAR/INT): Unique identifier for each item. (Primary Key)
+   - `itemDescription` (VARCHAR): Primary description of the item.
+   - `itemSecondaryDescription` (VARCHAR): Additional details about the item.
+   - `itemDepartment` (VARCHAR): Broader category (e.g., T-Shirt, Trousers, Jackets). Use LIKE 'value%' for filtering.
+   - `itemClass` (VARCHAR): Classification within a department (e.g., Formals, Casuals, Leather). Use LIKE 'value%' for filtering.
+   - `itemSubClass` (VARCHAR): Granular classification (e.g., Full Sleeve, Half Sleeve, Zipper, Regular Fit). Use LIKE 'value%' for filtering.
+   - `brand` (VARCHAR): Brand associated with the item (e.g., Zara, Adidas, H&M). Use = 'value' for filtering.
+   - `diffType1` (INT): Foreign key linking to `itemdiffs.id` (e.g., for color).
+   - `diffType2` (INT): Foreign key linking to `itemdiffs.id` (e.g., for size).
+   - `diffType3` (INT): Foreign key linking to `itemdiffs.id` (e.g., for material).
+
+2. `itemsupplier` (Alias: isup) (For Cost & Supplier Data):
+   - `id` (INT): Unique identifier for this relationship. (Primary Key)
+   - `supplierCost` (DECIMAL/FLOAT): Cost of the item from the supplier.
+   - `supplierId` (VARCHAR/INT): Identifier for the supplier.
+   - `itemId` (VARCHAR/INT): Foreign key linking to `itemmaster.itemId`.
+
+3. `itemdiffs` (Alias: idf) (For Attribute Filtering - Differentiation Types):
+   - `id` (INT): Unique identifier for each differentiation attribute. (Primary Key)
+   - `diffType` (VARCHAR): The attribute type (e.g., 'color', 'size', 'material'). Often used with diffId.
+   - `diffId` (VARCHAR): The actual differentiation value (e.g., 'Red', 'XL', 'Cotton'). Use = 'value' for filtering.
+
+4. `storedetails` (Alias: sd) (For Store Information):
+   - `storeId` (INT): Unique identifier for each store. (Primary Key)
+   - `storeName` (VARCHAR): Name of the store.
+   - `address` (VARCHAR): Street address.
+   - `city` (VARCHAR): City.
+   - `state` (VARCHAR): State.
+   - `zipCode` (VARCHAR): ZIP code.
+   - `phone` (VARCHAR): Contact phone number.
+
+Relationships:
+- `itemmaster.itemId` links to `itemsupplier.itemId`. JOIN using `ON im.itemId = isup.itemId`.
+- `itemmaster.diffType1`, `itemmaster.diffType2`, `itemmaster.diffType3` link to `itemdiffs.id`.
+"""
+
+# --- LLM Initialization ---
+# Use a lower temperature for more precise SQL generation
+sql_generator_llm = ChatOpenAI(
+    model="gpt-4o-mini", # Consider more powerful models like gpt-4o if mini struggles
+    api_key=OPENAI_API_KEY,
+    temperature=0.0 # Use 0 temperature for maximum determinism in SQL generation
+)
+
+# --- SQL Generation Function ---
+async def generate_sql_from_natural_language(natural_language_query: str) -> str | None:
+    """
+    Uses an LLM call to convert a natural language query into a SQL SELECT query,
+    based on the predefined TABLE_SCHEMA and specific instructions.
+
+    Args:
+        natural_language_query: The user's query in plain English.
+
+    Returns:
+        The generated SQL SELECT query string, or None if generation fails.
+    """
+    print("\n--- Attempting SQL Query Generation (v2) ---")
+    if not natural_language_query:
+        print("--- No natural language query provided. Skipping. ---")
+        return None
+
+    # Updated prompt for SQL generation with detailed instructions and examples
+    sql_generation_prompt = ChatPromptTemplate.from_messages([
+        ("system", f"""You are an expert SQL generator. Your task is to convert the user's natural language question into a valid SQL SELECT statement based ONLY on the database schema and rules provided below.
+
+Database Schema:
+{TABLE_SCHEMA}
+
+Core Task: Generate a SQL SELECT statement to retrieve `itemmaster.itemId` (and potentially other requested columns like `supplierCost`) based on the user's filtering criteria.
+
+Rules & Instructions:
+1.  **Focus on Selection Criteria:** Analyze the user's request and extract ONLY the criteria relevant for selecting items (e.g., brand, color, size, department, class, subclass, supplier cost).
+2.  **Ignore Irrelevant Information:** Completely IGNORE any information not directly related to filtering or selecting items based on the schema. This includes discounts, promotion details, validity dates, action verbs like "Create", "Offer", "Update", store IDs (unless specifically asked to filter by store details from `storedetails`). Your output MUST be a SELECT query, nothing else.
+3.  **SELECT Clause:** Primarily select `im.itemId`. If supplier cost is mentioned or requested, also select `isup.supplierCost`. If other specific columns are requested, include them using the appropriate aliases (im, isup, idf, sd). Use `DISTINCT` if joins might produce duplicate `itemId`s based on the query structure.
+4.  **FROM Clause:** Start with `FROM itemmaster im`.
+5.  **JOIN Clauses:**
+    * If filtering by `supplierCost` or selecting it, `JOIN itemsupplier isup ON im.itemId = isup.itemId`.
+    * Filtering by attributes (color, size, material, etc. stored in `itemdiffs`) requires checking `diffType1`, `diffType2`, `diffType3`. Use the `EXISTS` method for this. See Example 1 below.
+    * If filtering by store details, `JOIN storedetails sd ON ...` (Note: There's no direct link given between itemmaster/itemsupplier and storedetails in the schema, assume filtering by store details applies elsewhere or cannot be done with this schema unless a link is implied or added).
+6.  **WHERE Clause Construction:**
+    * **Attributes (`itemdiffs`):** To filter by an attribute like 'Red' or 'Large', use `EXISTS` subqueries checking `itemdiffs` linked via `diffType1`, `diffType2`, or `diffType3`. Example: `WHERE EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (...) OR EXISTS (...)`.
+    * **Direct `itemmaster` Fields:**
+        * Use `im.brand = 'Value'` for exact brand matches.
+        * Use `im.itemDepartment LIKE 'Value%'` for department matches.
+        * Use `im.itemClass LIKE 'Value%'` for class matches.
+        * Use `im.itemSubClass LIKE 'Value%'` for subclass matches.
+    * **`itemsupplier` Fields:** Use `isup.supplierCost < Value`, `isup.supplierCost > Value`, etc.
+    * **Multiple Values (Same Field):** Use `OR` (e.g., `im.brand = 'Zara' OR im.brand = 'Adidas'`). Consider using `IN` for longer lists (e.g., `im.brand IN ('Zara', 'Adidas')`).
+    * **Multiple Conditions (Different Fields):** Use `AND` (e.g., `im.itemDepartment LIKE 'T-Shirt%' AND im.brand = 'Zara'`).
+7.  **Output Format:** Generate ONLY the SQL SELECT statement. No explanations, no comments, no markdown backticks (```sql ... ```), no trailing semicolon.
+8.  **Invalid Queries:** If the user's query asks for something impossible with the schema (e.g., filtering items by store without a link, asking for non-SELECT operations), respond with "Query cannot be answered with the provided schema."
+
+Examples (Study these carefully):
+
+Example 1: Select all red colored items
+User Query: "Select all red colored items"
+SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red')
+
+Example 2: Select all red colored items with a supplier cost below $50
+User Query: "Select all red colored items with a supplier cost below $50"
+SQL: SELECT DISTINCT im.itemId, isup.supplierCost FROM itemmaster im JOIN itemsupplier isup ON im.itemId = isup.itemId WHERE isup.supplierCost < 50 AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red'))
+
+Example 3: Select all items from FashionX and Zara brands
+User Query: "Select all items from FashionX and Zara brands"
+SQL: SELECT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' OR im.brand = 'Zara'
+
+Example 4: Select all items from T-Shirt department and Casuals class
+User Query: "Select all items from T-Shirt department and Casuals class"
+SQL: SELECT im.itemId FROM itemmaster im WHERE im.itemDepartment LIKE 'T-Shirt%' AND im.itemClass LIKE 'Casuals%'
+
+Example 5: Complex request with irrelevant info
+User Query: "Create a simple promotion offering 30% off all yellow items from the FashionX Brand in the T-Shirt Department, valid from 17/04/2025 until the end of May 2025."
+SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' AND im.itemDepartment LIKE 'T-Shirt%' AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Yellow'))
+
+"""),
+        ("human", "Convert this question to a SQL SELECT query:\n\n```text\n{user_query}\n```")
+    ])
+
+    # Create the generation chain (Prompt -> LLM -> String Output)
+    sql_generation_chain = sql_generation_prompt | sql_generator_llm | StrOutputParser()
+
+    try:
+        # Limit input text length (optional)
+        max_len = 2000
+        truncated_query = natural_language_query[:max_len] + ("..." if len(natural_language_query) > max_len else "")
+
+        print(f"--- Generating SQL for: '{truncated_query}' ---")
+        generated_sql = await sql_generation_chain.ainvoke({"user_query": truncated_query})
+
+        # Basic validation and cleaning
+        generated_sql = generated_sql.strip().strip(';') # Remove surrounding whitespace and trailing semicolon
+
+        if generated_sql.lower().startswith("select"):
+            print("--- SQL Generation Successful ---")
+            return generated_sql
+        elif "cannot be answered" in generated_sql:
+             print(f"--- LLM indicated query cannot be answered: {generated_sql} ---")
+             return None
+        else:
+            # Check if it looks like SQL but doesn't start with select (e.g., LLM hallucinated UPDATE/INSERT)
+            if any(keyword in generated_sql.lower() for keyword in ['update ', 'insert ', 'delete ', 'drop ']):
+                 print(f"--- Generation failed: Non-SELECT statement generated: {generated_sql} ---")
+                 return None
+            print(f"--- Generation failed or produced non-SQL/invalid output: {generated_sql} ---")
+            return None
+
+    except Exception as e:
+        print(f"!!! ERROR during SQL generation: {e} !!!")
+        traceback.print_exc()
+        return None
+       
 # --- FastAPI Application ---
 app = FastAPI(
     title="LangChain Chatbot API (Function Calling, Streaming with stream_mode='messages')",
@@ -323,6 +436,9 @@ async def chat_endpoint(request: ChatRequest):
 
                     # Perform extraction on the full response text
                     extracted_details_obj = await extract_details_from_response(ai_response_text)
+                    extracted_sql_query = await generate_sql_from_natural_language(user_message)
+                    
+                    print("Extracted Query from user's message: ",extracted_sql_query)
 
                     if extracted_details_obj:
                         # Convert Pydantic model to dict for logging/potential future use

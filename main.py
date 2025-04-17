@@ -1,7 +1,9 @@
-from fastapi import FastAPI,Depends,HTTPException,status
+from fastapi import BackgroundTasks, FastAPI,Depends, Form,HTTPException,status
+from fastapi_mail import FastMail, MessageSchema, MessageType
+from insightGeneration import generate_supplier_insights
 from utils import gpt_response,extract_information,conversation,checkValidation,run_conversation,collect_invoice_data,bot_action,openaifunction,testModel,test_submission,extract_invoice_details,extract_text_from_pdf,extract_text_from_image,collect_invoice_data_from_file,extract_text_with_openai,categorize_invoice_details,client,categorize_invoice_details_new,previous_invoice_details,template_5,extract_details_gpt_vision,client_new,llm_gpt3,llm_gpt4,async_client ,template_5_new
 from poUtils import template_PO,DEFAULT_PO_STRUCTURE,categorize_po_details,previous_po_details
-from pydantic import BaseModel;
+from pydantic import BaseModel, EmailStr;
 from models import Base, StoreDetails,User,PoDetails,PoHeader,InvHeader,InvDetails,Supplier,ShipmentHeader,ItemDiffs,ItemSupplier,ItemMaster,PromotionDetails,PromotionHeader
 from schemas import StoreDetailsSchema, UserSchema,poHeaderCreate,poDetailsCreate,invHeaderCreate,invDetailsCreate,poDetailsSearch,invDetailsSerach,ChatRequest,SupplierCreate,ShipmentHeader,ShipmentDetails,ItemDiffsSchema,ItemSupplierSchema,ItemMasterSchema,PromotionDetailsSchema,PromotionHeaderSchema
 from schemas import ShipmentDetails as ShipmentDetailsSchema
@@ -54,6 +56,7 @@ from langchain_community.chat_models import ChatOpenAI
 # from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import difflib
+from send_email import conf 
 
 app = FastAPI()
 
@@ -77,6 +80,97 @@ app.add_middleware(
 chat_histories = {}
 user_po_details = {}
 
+#Email Functionality
+@app.post("/filenew")
+async def send_file_new(
+    file: UploadFile = File(...),
+    email: EmailStr = Form(...),
+    body: str = Form(...)
+) -> JSONResponse:
+    try:
+        body_dict: Dict[str, Any] = json.loads(body)
+    except json.JSONDecodeError:
+        return JSONResponse(status_code=400, content={"message": "Invalid JSON in 'body' field."})
+
+    message = MessageSchema(
+        subject="Fastapi-Mail module",
+        recipients=[email],
+        template_body=body_dict,
+        subtype=MessageType.html,
+        attachments=[file]  # ✅ Pass UploadFile directly
+    )
+
+    fm = FastMail(conf)
+    await fm.send_message(message, template_name="email.html")
+    return JSONResponse(status_code=200, content={"message": "Email has been sent."})
+
+class EmailSchema(BaseModel):
+    email: List[EmailStr]
+
+class EmailSchemaBody(BaseModel):
+    email: List[EmailStr]
+    body: Dict[str, Any]
+    
+class BodySchema(BaseModel):
+    body: Dict[str, Any]
+    
+    
+@app.post("/email-with-body")
+async def send_with_template(email: EmailSchemaBody) -> JSONResponse:
+
+    message = MessageSchema(
+        subject="Fastapi-Mail module",
+        recipients=email.dict().get("email"),
+        template_body=email.dict().get("body"),
+        subtype=MessageType.html,
+        )
+
+    fm = FastMail(conf)
+    await fm.send_message(message, template_name="email.html") 
+    return JSONResponse(status_code=200, content={"message": "email has been sent"})
+ 
+@app.post("/file")
+async def send_file(
+
+    file: UploadFile = File(...),
+    email:EmailStr = Form(...),
+    ) -> JSONResponse:
+
+    message = MessageSchema(
+            subject="Fastapi mail module",
+            recipients=[email],
+            body="Simple background task",
+            subtype=MessageType.html,
+            attachments=[file])
+
+    fm = FastMail(conf)
+    await fm.send_message(message, template_name="email.html") 
+    return JSONResponse(status_code=200, content={"message": "email has been sent"})
+
+@app.post("/send-email/attachment")
+def send_email_with_attachment(background_tasks: BackgroundTasks, subject: str, email_to: str, body: dict, attachment_path: str):
+    try:
+        # Read the PDF file in binary mode
+        with open(attachment_path, "rb") as f:
+            file_data = f.read()
+
+        # Create the attachment tuple: (filename, content, MIME type)
+        attachment = (os.path.basename(attachment_path), file_data, "application/pdf")
+    except Exception as e:
+        print(f"Error reading attachment: {e}")
+        return {"error": "Attachment could not be read."}
+
+    # Compose the message with attachment
+    message = MessageSchema(
+        subject=subject,
+        recipients=[email_to],
+        template_body=body,  # Updated field
+        subtype='html',
+        attachments=[attachment]
+    )
+    fm = FastMail(conf)
+    background_tasks.add_task(fm.send_message, message, template_name='email.html')
+    return {"status": "Email with attachment initiated"}
 
 #Store
 @app.post("/storeCreation/", status_code=status.HTTP_201_CREATED)
@@ -469,6 +563,54 @@ def query_database_function_promo(question: str, db: Session) -> str:
     #### **4. Department Name Flexibility**
     - When filtering by `itemDepartment`, use the `LIKE` operator with a trailing wildcard `%` to match plural/singular forms. 
       For example, if the user specifies 'T-Shirts', use `im.itemDepartment LIKE 'T-Shirt%'`.
+      
+    #### **5. Handling Multiple Predicate Filtering**  
+    - If the user query contains more than one predicate for the same field (for example, multiple brands or multiple department values), the query should use the OR operator to combine these values.
+    - For example:
+        - **Multiple Brands:**  
+          User: "Select all items from FashionX and Zara brands"  
+          Expected SQL:  
+          ```sql
+          SELECT im.itemId
+          FROM itemmaster im
+          WHERE im.brand = 'FashionX' OR im.brand = 'Zara'
+          ```
+        - **Multiple Departments:**  
+          User: "Select all items from T-Shirt and Shirt departments"  
+          Expected SQL:  
+          ```sql
+          SELECT im.itemId
+          FROM itemmaster im
+          WHERE im.itemDepartment LIKE 'T-Shirt%' OR im.itemDepartment LIKE 'Shirt%'
+          ```
+        - **Multiple Sub Classes:**  
+          User: "Select all items from Half and Full Sleeve Sub Classes"  
+          Expected SQL:  
+          ```sql
+          SELECT im.itemId
+          FROM itemmaster im
+          WHERE im.itemSubClass LIKE 'Half Sleeve%' OR im.itemSubClass LIKE 'Full Sleeve%'
+          ```
+        - **Multiple Classes:**  
+          User: "Select all items from Formals and Casuals Classes"  
+          Expected SQL:  
+          ```sql
+          SELECT im.itemId
+          FROM itemmaster im
+          WHERE im.itemClass LIKE 'Formals%' OR im.itemClass LIKE 'Casuals%'
+          ```
+    #### **4. Handling Mixed Hierarchy Predicates (Across Different Fields)**  
+    - If the user query specifies different hierarchy types (for instance, a department and a class), these conditions should be combined with an AND operator.
+    - For example:
+        - **Mixed Hierarchy Example:**  
+            User: "Select all items from T-Shirt department and Casuals class"  
+            Expected SQL:  
+            ```sql
+            SELECT im.itemId
+            FROM itemmaster im
+            WHERE im.itemDepartment LIKE 'T-Shirt%' AND im.itemClass LIKE 'Casuals%'
+            ```
+      
     ---
     ### **SQL Examples:**
 
@@ -502,6 +644,46 @@ def query_database_function_promo(question: str, db: Session) -> str:
     FROM itemmaster im
     WHERE im.itemDepartment LIKE 'T-Shirt%'
     ```
+    #### **Example 5: Select Items Filtering on Multiple Brands**
+    User: "Select all items from FashionX and Zara brands"
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.brand = 'FashionX' OR im.brand = 'Zara'
+    ```
+    
+    #### **Example 6: Select Items Filtering on Multiple Departments**
+    User: "Select all items from T-Shirt and Shirt departments"
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.itemDepartment LIKE 'T-Shirt%' OR im.itemDepartment LIKE 'Shirt%'
+    ```
+    
+    #### **Example 7: Select Items Filtering on Multiple Sub Classes**
+    User: "Select all items from Half and Full Sleeve Sub Classes"
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.itemSubClass LIKE 'Half Sleeve%' OR im.itemSubClass LIKE 'Full Sleeve%'
+    ```
+    
+    #### **Example 8: Select Items Filtering on Multiple Classes**
+    User: "Select all items from Formals and Casuals Classes"
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.itemClass LIKE 'Formals%' OR im.itemClass LIKE 'Casuals%'
+    ```
+    
+    #### **Example 9: Mixed Hierarchy Conditions**
+    User: "Select all items from T-Shirt department and Casuals class"
+    ```sql
+    SELECT im.itemId
+    FROM itemmaster im
+    WHERE im.itemDepartment LIKE 'T-Shirt%' AND im.itemClass LIKE 'Casuals%'
+    ```
+    
     """
     try:
         response = client.chat.completions.create(
@@ -549,11 +731,195 @@ def db_query(query: str, params: dict = None) -> List:
         print(f"Database error: {e}")
         return []
 # Optimized core functions
-def find_attributes(question: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
-    """Find attributes, values, and their ID in a single optimized flow."""
+# def find_attributes(question: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+#     """Find attributes, values, and their ID in a single optimized flow."""
+#     print(f"\nProcessing query: '{question}'")
+    
+#     # Get attribute metadata in single query
+#     attr_data = db_query(
+#         "SELECT diffType, diffId, id FROM itemdiffs GROUP BY diffType, diffId"
+#     )
+    
+#     if not attr_data:
+#         print("No attribute data found in database")
+#         return (None, None, None)
+
+#     # Build optimized attribute structure {diffType: {diffId: id}}
+        
+#     attribute_map = {}
+#     for diff_type, diff_id, id_val in attr_data:
+#         key = diff_id.lower()  # Store diffId in lowercase
+#         attribute_map.setdefault(diff_type, {})[key] = id_val
+
+#     print(f"Attribute map: {attribute_map.keys()}")
+    
+#     # Detect attributes using optimized function
+#     attr, value = detect_attribute(question, attribute_map)
+#     if not attr or not value:
+#         return (None, None, None)
+
+#     # Get ID from pre-loaded map
+#     item_id = attribute_map.get(attr, {}).get(value)
+#     logging.info("Find attributes: %s %s %s", attr, value, item_id)
+#     return (attr, value, item_id)
+
+# def detect_attribute(question: str, attribute_map: Dict) -> Tuple[Optional[str], Optional[str]]:
+#     """Optimized attribute detection with fuzzy matching."""
+#     if not attribute_map:
+#         return (None, None)
+
+#     try:
+#         # Build a string for debugging purposes (could also be logged)
+#         attr_desc = "\n".join(
+#             f"- {attr}: {', '.join(values.keys())}" 
+#             for attr, values in attribute_map.items()
+#         )
+        
+#         # Here, instead of relying solely on a prompt,
+#         # we perform fuzzy matching for known attributes.
+#         # For each attribute type (e.g., 'itemDepartment'), check if any of its values
+#         # closely match substrings in the question.
+#         detected_attr = None
+#         detected_value = None
+#         for attr, values in attribute_map.items():
+#             for candidate_value in values.keys():
+#                 # Use get_close_matches to see if candidate_value is similar to a word in the question.
+#                 # You may want to split the question into words or use the full question.
+#                 matches = difflib.get_close_matches(candidate_value.lower(), question.lower().split(), cutoff=0.6)
+#                 if matches:
+#                     detected_attr = attr
+#                     detected_value = candidate_value
+#                     break
+#             if detected_attr and detected_value:
+#                 break
+        
+#         # If fuzzy matching didn't find anything, fallback to the original prompt-based approach:
+#         if not detected_attr or not detected_value:
+#             prompt = f"""Analyze query: "{question}"
+#             Identify attributes from:
+#             {attr_desc}
+#             Respond in JSON format: {{"attribute": "...", "value": "..."}}"""
+    
+#             response = client.chat.completions.create(
+#                  model="gpt-4o",
+#                 messages=[{
+#                     "role": "system",
+#                     "content": "You are a retail data analyst. Identify product attributes."
+#                 }, {
+#                     "role": "user", 
+#                     "content": prompt
+#                 }],
+#                 response_format={"type": "json_object"},
+#                 temperature=0.1
+#             )
+#             result = json.loads(response.choices[0].message.content)
+#             detected_attr = result.get('attribute')
+#             detected_value = result.get('value')
+
+#         non_attribute_fields = ['department', 'class', 'sub_class', 'brand']
+#         if detected_attr in non_attribute_fields:
+#             # Bypass itemdiffs validation for these fields
+#             return (detected_attr, detected_value)
+#         # Validate against known data (perform a fuzzy check if the detected value is not an exact match)
+#         possible_values = list(attribute_map.get(detected_attr, {}).keys())
+#         close_matches = difflib.get_close_matches(detected_value, possible_values, n=1, cutoff=0.6)
+#         logging.info("Detect attributes: %s", close_matches )
+#         if close_matches:
+#             detected_value = close_matches[0]
+#         else:
+#             print(f"Invalid detection: {detected_attr}/{detected_value}")
+#             return (None, None)
+    
+#         return (detected_attr, detected_value)
+    
+#     except Exception as e:
+#         print(f"Detection error: {e}")
+#         return (None, None)
+
+def detect_attribute(question: str, attribute_map: Dict) -> Tuple[List[str], List[str]]:
+    """Optimized attribute detection for multiple attributes.
+    
+    Returns a tuple of two lists: (attributes, values). For example:
+      Query: "Select all red and yellow items"
+      Returns: (["color"], ["red", "yellow"])
+      
+      Query: "Select all red and Large items"
+      Returns: (["color", "size"], ["red", "L"])
+    """
+    if not attribute_map:
+        return ([], [])
+
+    detected = {}  # key: attribute type, value: set of detected candidate values
+    lower_question = question.lower()
+    words = lower_question.split()
+
+    # Iterate over each attribute type and its candidate values.
+    for attr, candidates in attribute_map.items():
+        for candidate in candidates.keys():
+            # Use a simple check: if candidate is a substring in the question.
+            if candidate in lower_question:
+                detected.setdefault(attr, set()).add(candidate)
+            else:
+                # Otherwise, use fuzzy matching: check each word for a close match.
+                for word in words:
+                    matches = difflib.get_close_matches(word, [candidate], n=1, cutoff=0.6)
+                    if matches:
+                        detected.setdefault(attr, set()).add(candidate)
+                        break
+
+    # Fallback using prompt if nothing was detected.
+    if not detected:
+        attr_desc = "\n".join(
+            f"- {attr}: {', '.join(values.keys())}"
+            for attr, values in attribute_map.items()
+        )
+        prompt = f"""Analyze query: "{question}"
+Identify attributes from:
+{attr_desc}
+Respond in JSON format: {{"attribute": [...], "value": [...]}}"""
+        response = client.chat.completions.create(
+             model="gpt-4o",
+            messages=[{
+                "role": "system",
+                "content": "You are a retail data analyst. Identify product attributes."
+            }, {
+                "role": "user", 
+                "content": prompt
+            }],
+            response_format={"type": "json_object"},
+            temperature=0.1
+        )
+        result = json.loads(response.choices[0].message.content)
+        # Expect result["attribute"] and result["value"] to be lists.
+        return (result.get("attribute", []), result.get("value", []))
+    
+    # Flatten the detected dictionary into two lists.
+    attributes: List[str] = []
+    values: List[str] = []
+    for attr, vals in detected.items():
+        for v in vals:
+            attributes.append(attr)
+            values.append(v)
+    
+    # Optional: refine using fuzzy matching on the candidate set so that e.g. "Large" can be mapped to "L" if needed.
+    # (Implementation here depends on your database values.)
+    logging.info("Detected attributes (pre-refinement): %s, values: %s", attributes, values)
+    return (attributes, values)
+
+def find_attributes(question: str) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[List[int]]]:
+    """Find multiple attributes, values, and their IDs in a single optimized flow.
+
+    Returns a tuple of three lists:
+      (list_of_attributes, list_of_values, list_of_ids)
+    For example:
+      "Select all red and yellow items" ->
+         (["color"], ["red", "yellow"], [id_red, id_yellow])
+      "Select all red and Large items" ->
+         (["color", "size"], ["red", "L"], [id_red, id_large])
+    """
     print(f"\nProcessing query: '{question}'")
     
-    # Get attribute metadata in single query
+    # Get attribute metadata in a single query.
     attr_data = db_query(
         "SELECT diffType, diffId, id FROM itemdiffs GROUP BY diffType, diffId"
     )
@@ -562,94 +928,32 @@ def find_attributes(question: str) -> Tuple[Optional[str], Optional[str], Option
         print("No attribute data found in database")
         return (None, None, None)
 
-    # Build optimized attribute structure {diffType: {diffId: id}}
-        
-    attribute_map = {}
+    # Build an optimized attribute map: {diffType: {diffId(lowercase): id}}
+    attribute_map: Dict[str, Dict[str, int]] = {}
     for diff_type, diff_id, id_val in attr_data:
-        key = diff_id.lower()  # Store diffId in lowercase
+        key = diff_id.lower()  # Store candidate value as lowercase
         attribute_map.setdefault(diff_type, {})[key] = id_val
 
-    print(f"Attribute map: {attribute_map.keys()}")
+    print(f"Attribute map keys: {list(attribute_map.keys())}")
     
-    # Detect attributes using optimized function
-    attr, value = detect_attribute(question, attribute_map)
-    if not attr or not value:
+    # Detect attributes using our modified function.
+    detected_attrs, detected_values = detect_attribute(question, attribute_map)
+    if not detected_attrs or not detected_values:
         return (None, None, None)
 
-    # Get ID from pre-loaded map
-    item_id = attribute_map.get(attr, {}).get(value)
-    return (attr, value, item_id)
-def detect_attribute(question: str, attribute_map: Dict) -> Tuple[Optional[str], Optional[str]]:
-    """Optimized attribute detection with fuzzy matching."""
-    if not attribute_map:
-        return (None, None)
-
-    try:
-        # Build a string for debugging purposes (could also be logged)
-        attr_desc = "\n".join(
-            f"- {attr}: {', '.join(values.keys())}" 
-            for attr, values in attribute_map.items()
-        )
-        
-        # Here, instead of relying solely on a prompt,
-        # we perform fuzzy matching for known attributes.
-        # For each attribute type (e.g., 'itemDepartment'), check if any of its values
-        # closely match substrings in the question.
-        detected_attr = None
-        detected_value = None
-        for attr, values in attribute_map.items():
-            for candidate_value in values.keys():
-                # Use get_close_matches to see if candidate_value is similar to a word in the question.
-                # You may want to split the question into words or use the full question.
-                matches = difflib.get_close_matches(candidate_value.lower(), question.lower().split(), cutoff=0.6)
-                if matches:
-                    detected_attr = attr
-                    detected_value = candidate_value
-                    break
-            if detected_attr and detected_value:
-                break
-        
-        # If fuzzy matching didn't find anything, fallback to the original prompt-based approach:
-        if not detected_attr or not detected_value:
-            prompt = f"""Analyze query: "{question}"
-            Identify attributes from:
-            {attr_desc}
-            Respond in JSON format: {{"attribute": "...", "value": "..."}}"""
-    
-            response = client.chat.completions.create(
-                 model="gpt-4o",
-                messages=[{
-                    "role": "system",
-                    "content": "You are a retail data analyst. Identify product attributes."
-                }, {
-                    "role": "user", 
-                    "content": prompt
-                }],
-                response_format={"type": "json_object"},
-                temperature=0.1
-            )
-            result = json.loads(response.choices[0].message.content)
-            detected_attr = result.get('attribute')
-            detected_value = result.get('value')
-
-        non_attribute_fields = ['department', 'class', 'sub_class', 'brand']
-        if detected_attr in non_attribute_fields:
-            # Bypass itemdiffs validation for these fields
-            return (detected_attr, detected_value)
-        # Validate against known data (perform a fuzzy check if the detected value is not an exact match)
-        possible_values = list(attribute_map.get(detected_attr, {}).keys())
-        close_matches = difflib.get_close_matches(detected_value, possible_values, n=1, cutoff=0.6)
-        if close_matches:
-            detected_value = close_matches[0]
+    # Look up each detected value in the attribute map to get corresponding IDs.
+    detected_ids: List[int] = []
+    for attr, val in zip(detected_attrs, detected_values):
+        id_val = attribute_map.get(attr, {}).get(val)
+        if id_val is None:
+            logging.warning("No ID found for attribute %s with value %s", attr, val)
+            # You may decide to either skip or return None.
+            detected_ids.append(-1)  # or use a placeholder value
         else:
-            print(f"Invalid detection: {detected_attr}/{detected_value}")
-            return (None, None)
-    
-        return (detected_attr, detected_value)
-    
-    except Exception as e:
-        print(f"Detection error: {e}")
-        return (None, None)
+            detected_ids.append(id_val)
+
+    logging.info("Find attributes: %s, values: %s, IDs: %s", detected_attrs, detected_values, detected_ids)
+    return (detected_attrs, detected_values, detected_ids)
 
 llm_gpt4 = ChatOpenAI(model_name="gpt-4-turbo", temperature=0.7)
 response_cache = {}  # In-memory cache keyed by conversation hash
@@ -673,6 +977,7 @@ DEFAULT_PROMO_STRUCTURE = {
     "status": "draft"
 }
 user_promo_details={}
+
 
 def classify_query(user_message: str, conversation_context: str) -> str:
     """
@@ -760,6 +1065,39 @@ def apply_lcel(chain, lcel_expression):
     print("Applying LCEL configuration:", lcel_expression)
     # For now, return the chain unchanged
     return chain
+
+def db_query_insights(query: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    """Generic database query executor with error handling."""
+    db = None # Initialize db to None
+    try:
+        db = next(get_db())
+        # Use .mappings().fetchall() to get list of dict-like objects directly
+        result = db.execute(text(query), params or {}).mappings().fetchall()
+        # Alternatively, if using older SQLAlchemy or prefer explicit dict conversion:
+        # result_proxy = db.execute(text(query), params or {})
+        # result = [dict(row) for row in result_proxy.fetchall()]
+        return result
+    except Exception as e:
+        # Log the actual error!
+        logging.error(f"Database error executing query: {query} with params: {params}", exc_info=True)
+        return []
+    finally:
+        if db:
+            # It's generally better practice to manage the session lifecycle
+            # using a context manager within the calling scope (e.g., using the
+            # contextmanager get_db provides), rather than closing here,
+            # but keeping db.close() based on your original structure.
+            try:
+                db.close()
+            except Exception as close_err:
+                logging.error(f"Error closing DB session: {close_err}", exc_info=True)
+
+@app.get("/supplier-risk-insights")
+async def supplier_risk(supplierId:str):
+    insights=generate_supplier_insights(supplierId,db_query_insights)
+    logging.info("promo_entities success: %s", generate_supplier_insights(supplierId,db_query_insights))
+
+    return {"insights":insights}
 
 @app.post("/promo-chat")
 async def handle_promotion_chat(request: dict):

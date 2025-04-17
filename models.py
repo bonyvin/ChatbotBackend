@@ -45,54 +45,6 @@ class PromotionHeader(Base):
         foreign_keys="[PromotionDetails.promotionId]",
         back_populates="promotionHeaders"
     )
-# #STORE
-# class StoreDetails(Base):
-#     __tablename__ = "storeDetails"
-#     storeId = Column(String(255), primary_key=True, index=True)
-#     storeName = Column(String(255), nullable=False)
-#     address = Column(String(255), nullable=False)
-#     city = Column(String(100), nullable=False)
-#     state = Column(String(100), nullable=False)
-#     zipCode = Column(String(20), nullable=False)
-#     phone = Column(String(20), nullable=False)
-    
-#     invoiceHeader = relationship("InvHeader", back_populates="store", uselist=False)
-#     shipmentHeader = relationship("ShipmentHeader", back_populates="store", uselist=False)
-#     promotionHeaders = relationship("PromotionHeader", back_populates="store")
-    
-
-
-# #PROMOTION
-# class PromotionHeader(Base):
-#     __tablename__ = "promotionHeader"
-    
-#     promotionId = Column(String(255), primary_key=True, index=True)
-#     componentId = Column(String(255), nullable=False, index=True, unique=True)
-#     startDate = Column(Date, index=True)
-#     endDate = Column(Date, index=True)
-#     promotionType = Column(String(20), nullable=False)
-    
-#     storeId = Column(String(255), ForeignKey("storeDetails.storeId"))
-#     store = relationship("StoreDetails", back_populates="promotionHeaders")
-#     promotionDetailsbp = relationship(
-#         "PromotionDetails", 
-#         foreign_keys="[PromotionDetails.promotionId]",  # Specify foreign key
-#         back_populates="promotionHeaders"
-#     )
-# class PromotionHeader(Base):
-#     __tablename__ = "promotionHeader"
-
-#     promotionId = Column(String(255), primary_key=True, index=True)
-#     componentId = Column(String(255), nullable=False, index=True, unique=True)
-#     startDate = Column(Date, index=True)
-#     endDate = Column(Date, index=True)
-#     promotionType = Column(String(20), nullable=False)
-
-#     promotionDetailsbp = relationship(
-#         "PromotionDetails", 
-#         foreign_keys="[PromotionDetails.promotionId]",  # Specify foreign key
-#         back_populates="promotionHeaders"
-#     )
 
 class PromotionDetails(Base):
     __tablename__ = "promotionDetails"
@@ -182,26 +134,6 @@ class ShipmentHeader(Base):
     poId = Column(String(225), ForeignKey("poHeader.poNumber"))
     store = relationship("StoreDetails", back_populates="shipmentHeader")
     shipmentDetails = relationship("ShipmentDetails", back_populates="shipmentHeader")
-
-# class ShipmentHeader(Base):
-#     __tablename__='shipmentHeader'
-#     receiptId= Column(String(255),primary_key=True, index=True)
-#     asnId = Column(String(225), index=True )
-#     expectedDate=Column(Date , index=True)
-#     receivedDate=Column(Date , index=True)
-#     receivedBy=Column(String(225), index=True )
-#     status=Column(String(225), index=True )
-
-#     sourceLocation=Column(String(225), index=True )
-#     destinationLocation=Column(String(225), index=True )
-#     totalQuantity=Column(Integer, index=True )
-#     totalCost=Column(Float, index=True )
-
-#     poHeader= relationship("PoHeader", back_populates="shipmentHeader")
-#     poId = Column(String(225), ForeignKey("poHeader.poNumber"))
-
-#     shipmentDetails = relationship("ShipmentDetails", back_populates="shipmentHeader")
-
 
 class ShipmentDetails(Base):
     __tablename__='shipmentDetails'
