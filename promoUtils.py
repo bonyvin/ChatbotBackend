@@ -349,7 +349,8 @@ Items: ITEM003,ITEM004
 {missing_fields}  
 
 Would you like to submit this information?  
-If you respond with 'Yes', I'll confirm with *"Promotion created successfully. Thank you for choosing us."*  
+If you respond with 'Yes', I'll confirm with *"Promotion created successfully. Thank you for choosing us."*
+Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
 """
 # template_Promotion_without_date = """  
 # Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your promotion operations and provide seamless support. Today is {current_date}.  
@@ -580,7 +581,8 @@ DEFAULT_PROMO_STRUCTURE = {
   "Start Date": "" ,
   "End Date": "",
   "Stores":  [],
-  "Excluded Location List":[] 
+  "Excluded Location List":[] ,
+  "Email":""
 
 }
 previous_promo_details = defaultdict(dict)
@@ -875,6 +877,7 @@ The fields and their expected formats are:
   - **End Date**: (dd/mm/yyyy)
   - **Stores**: Array of Store IDs formatted as ['STORE001', 'STORE002']
   - **Excluded Stores**: Array of Store IDs formatted as ['STORE001', 'STORE002']
+  - **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
 
 Use the exact field names as given above.
 
@@ -931,7 +934,7 @@ If a field’s value is missing, return null (or an empty array for fields expec
     primary_fields = [
         "Promotion Type", "Hierarchy Type", "Hierarchy Value", "Brand", 
         "Items", "Excluded Items", "Discount Type", "Discount Value", 
-        "Start Date", "End Date", "Stores", "Excluded Stores"
+        "Start Date", "End Date", "Stores", "Excluded Stores","Email"
     ]
     if all(not merged_data.get(field) for field in primary_fields):
         print("No valid data extracted; returning previous data.")

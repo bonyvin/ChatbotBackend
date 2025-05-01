@@ -1,6 +1,7 @@
+import base64
 from fastapi import BackgroundTasks, FastAPI,Depends, Form,HTTPException,status
 from fastapi_mail import FastMail, MessageSchema, MessageType
-from insightGeneration import generate_supplier_insights
+from insightGeneration import generate_supplier_insights,plot_all_graphs
 from utils import gpt_response,extract_information,conversation,checkValidation,run_conversation,collect_invoice_data,bot_action,openaifunction,testModel,test_submission,extract_invoice_details,extract_text_from_pdf,extract_text_from_image,collect_invoice_data_from_file,extract_text_with_openai,categorize_invoice_details,client,categorize_invoice_details_new,previous_invoice_details,template_5,extract_details_gpt_vision,client_new,llm_gpt3,llm_gpt4,async_client ,template_5_new
 from poUtils import template_PO,DEFAULT_PO_STRUCTURE,categorize_po_details,previous_po_details
 from pydantic import BaseModel, EmailStr;
@@ -24,7 +25,7 @@ import openai
 from datetime import datetime  # Add this import at the top of your file
 import copy
 # from exampleextrator import run_conversation
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse,Response
 import mysql.connector
 Base.metadata.create_all(bind=engine)
 from sqlalchemy.sql import text
@@ -58,6 +59,10 @@ from langchain_core.output_parsers import StrOutputParser
 import difflib
 from send_email import conf 
 
+import plotly.graph_objects as go
+import plotly.io as pio
+import io
+
 app = FastAPI()
 
 origins = [
@@ -79,6 +84,43 @@ app.add_middleware(
 #PO Chatbot Functions
 chat_histories = {}
 user_po_details = {}
+
+@app.get("/plot")
+async def plot_png():
+    fill_rate = 100.0
+    pending_rate = 0.0
+    non_defective_rate = 98.6
+    defective_rate = 1.4
+    avg_delay = 2.0
+    risk_score = 0.1
+    graphs = await plot_all_graphs(fill_rate,pending_rate,non_defective_rate,defective_rate,avg_delay,risk_score)
+    return {"graphs": graphs}
+
+    # def fig_to_bytes(fig):
+    #     buf = io.BytesIO()
+    #     fig.write_image(buf, format="png")
+    #     return buf.getvalue()
+
+    # # Render each figure to raw bytes
+    # bar_bytes   = fig_to_bytes(graphs["bar_fig"])
+    # pie_bytes   = fig_to_bytes(graphs["pie_fig"])
+    # gauge_bytes = fig_to_bytes(graphs["gauge_fig"])
+    # delay_bytes = fig_to_bytes(graphs["delay_fig"])
+
+    # # Base-64 encode & add a data URI prefix so it's directly displayable in browsers
+    # def to_data_uri(img_bytes):
+    #     b64 = base64.b64encode(img_bytes).decode("ascii")
+    #     return f"data:image/png;base64,{b64}"
+
+    # return JSONResponse(
+    #     content={
+    #         "bar_chart"   : to_data_uri(bar_bytes),
+    #         "pie_chart"   : to_data_uri(pie_bytes),
+    #         "gauge_chart" : to_data_uri(gauge_bytes),
+    #         "delay_chart" : to_data_uri(delay_bytes),
+    #     }
+    # )
+    
 
 #Email Functionality
 @app.post("/filenew")
@@ -129,48 +171,48 @@ async def send_with_template(email: EmailSchemaBody) -> JSONResponse:
     await fm.send_message(message, template_name="email.html") 
     return JSONResponse(status_code=200, content={"message": "email has been sent"})
  
-@app.post("/file")
-async def send_file(
+# @app.post("/file")
+# async def send_file(
 
-    file: UploadFile = File(...),
-    email:EmailStr = Form(...),
-    ) -> JSONResponse:
+#     file: UploadFile = File(...),
+#     email:EmailStr = Form(...),
+#     ) -> JSONResponse:
 
-    message = MessageSchema(
-            subject="Fastapi mail module",
-            recipients=[email],
-            body="Simple background task",
-            subtype=MessageType.html,
-            attachments=[file])
+#     message = MessageSchema(
+#             subject="Fastapi mail module",
+#             recipients=[email],
+#             body="Simple background task",
+#             subtype=MessageType.html,
+#             attachments=[file])
 
-    fm = FastMail(conf)
-    await fm.send_message(message, template_name="email.html") 
-    return JSONResponse(status_code=200, content={"message": "email has been sent"})
+#     fm = FastMail(conf)
+#     await fm.send_message(message, template_name="email.html") 
+#     return JSONResponse(status_code=200, content={"message": "email has been sent"})
 
-@app.post("/send-email/attachment")
-def send_email_with_attachment(background_tasks: BackgroundTasks, subject: str, email_to: str, body: dict, attachment_path: str):
-    try:
-        # Read the PDF file in binary mode
-        with open(attachment_path, "rb") as f:
-            file_data = f.read()
+# @app.post("/send-email/attachment")
+# def send_email_with_attachment(background_tasks: BackgroundTasks, subject: str, email_to: str, body: dict, attachment_path: str):
+#     try:
+#         # Read the PDF file in binary mode
+#         with open(attachment_path, "rb") as f:
+#             file_data = f.read()
 
-        # Create the attachment tuple: (filename, content, MIME type)
-        attachment = (os.path.basename(attachment_path), file_data, "application/pdf")
-    except Exception as e:
-        print(f"Error reading attachment: {e}")
-        return {"error": "Attachment could not be read."}
+#         # Create the attachment tuple: (filename, content, MIME type)
+#         attachment = (os.path.basename(attachment_path), file_data, "application/pdf")
+#     except Exception as e:
+#         print(f"Error reading attachment: {e}")
+#         return {"error": "Attachment could not be read."}
 
-    # Compose the message with attachment
-    message = MessageSchema(
-        subject=subject,
-        recipients=[email_to],
-        template_body=body,  # Updated field
-        subtype='html',
-        attachments=[attachment]
-    )
-    fm = FastMail(conf)
-    background_tasks.add_task(fm.send_message, message, template_name='email.html')
-    return {"status": "Email with attachment initiated"}
+#     # Compose the message with attachment
+#     message = MessageSchema(
+#         subject=subject,
+#         recipients=[email_to],
+#         template_body=body,  # Updated field
+#         subtype='html',
+#         attachments=[attachment]
+#     )
+#     fm = FastMail(conf)
+#     background_tasks.add_task(fm.send_message, message, template_name='email.html')
+#     return {"status": "Email with attachment initiated"}
 
 #Store
 @app.post("/storeCreation/", status_code=status.HTTP_201_CREATED)
@@ -1094,8 +1136,32 @@ def db_query_insights(query: str, params: Dict[str, Any] = None) -> List[Dict[st
 
 @app.get("/supplier-risk-insights")
 async def supplier_risk(supplierId:str):
-    insights=generate_supplier_insights(supplierId,db_query_insights)
-    logging.info("promo_entities success: %s", generate_supplier_insights(supplierId,db_query_insights))
+    insights=await generate_supplier_insights(supplierId,db_query_insights)
+    logging.info("promo_entities success: %s", await generate_supplier_insights(supplierId,db_query_insights))
+    # def fig_to_bytes(fig):
+    #     buf = io.BytesIO()
+    #     fig.write_image(buf, format="png")
+    #     return buf.getvalue()
+    # graphs=insights["graph_data"]
+    # # Render each figure to raw bytes
+    # bar_bytes   = fig_to_bytes(graphs["bar_fig"])
+    # pie_bytes   = fig_to_bytes(graphs["pie_fig"])
+    # gauge_bytes = fig_to_bytes(graphs["gauge_fig"])
+    # delay_bytes = fig_to_bytes(graphs["delay_fig"])
+
+    # # Base-64 encode & add a data URI prefix so it's directly displayable in browsers
+    # def to_data_uri(img_bytes):
+    #     b64 = base64.b64encode(img_bytes).decode("ascii")
+    #     return f"data:image/png;base64,{b64}"
+
+    # return JSONResponse(
+    #     content={
+    #         "bar_chart"   : to_data_uri(bar_bytes),
+    #         "pie_chart"   : to_data_uri(pie_bytes),
+    #         "gauge_chart" : to_data_uri(gauge_bytes),
+    #         "delay_chart" : to_data_uri(delay_bytes),
+    #     }
+    # )
 
     return {"insights":insights}
 
@@ -2116,14 +2182,19 @@ async def generate_response_new(request: ChatRequest):
                 # print("New messages: ",messages)
                 po_item_ids = [item["itemId"] for item in po_items]
                 po_item_ids_string = ",".join(po_item_ids)
-                updated_template = template_5_new.replace(
-                    "{po_item_list}", 
-                    f"**PO Items to Include:** {po_item_ids_string}"
-                )
-                
-                # Update messages with modified template
-                messages[0]["content"] = updated_template
-                
+                # updated_template = template_5_new.replace(
+                #     "{po_item_list}", 
+                #     f"**PO Items to Include:** {po_item_ids_string}"
+                # )
+                print("po_item_ids_string: ",po_item_ids_string,"po_items",po_items )
+                # print("updated_template: ",updated_template)
+                # # Update messages with modified template
+                # messages[0]["content"] = updated_template
+                messages.append({
+                    "role": "user",  # Simulate user input
+                    "content": f"Items: {po_item_ids_string}"
+                })
+                # 
                 # Mark this PO as processed
                 user_po_cache[user_id].add(po_number)
 
