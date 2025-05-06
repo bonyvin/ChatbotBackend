@@ -52,8 +52,8 @@ def calculate_quality_metrics(total_received: int, total_damaged: int) -> Tuple[
     # Ensure damaged doesn't exceed received
     total_damaged = min(total_damaged, total_received)
     non_defective = total_received - total_damaged
-    non_defective_rate = (non_defective / total_received) * 100
-    defective_rate = 100.0 - non_defective_rate
+    non_defective_rate = round(((non_defective / total_received) * 100),2)
+    defective_rate = round((100.0 - non_defective_rate),2)
     return non_defective_rate, defective_rate
 
 def compute_risk_score(fill_rate: float, avg_delay: float, defective_rate: float) -> float:
@@ -328,13 +328,11 @@ async def generate_supplier_insights(supplier_id: str, db_query_func: DbQueryFun
     graph_data= await plot_all_graphs(fill_rate,pending_rate,non_defective_rate,defective_rate,avg_delay,risk_score)
     fill_rate_dict={"fill_rate":f"{fill_rate:.1f}% delivered ({total_delivered}/{total_ordered} items)",
                     "pending_rate":f"{pending_rate:.1f}% pending."}
-    # quality_dict={"non_defective_rate":f"{non_defective_rate:.1f}% non-defective",
-    #               "defective_rate":}
-    # print("Graph Data: ",graph_data)
-    # insights={"fill_rate":f"{fill_rate:.1f}% delivered ({total_delivered}/{total_ordered} items), {pending_rate:.1f}% pending.\n",
+    quality_dict={"non_defective_rate":f"{non_defective_rate:.1f}% non-defective",
+                  "defective_rate":f"{defective_rate:.1f}% defective"}
     insights={"fill_rate_dict":fill_rate_dict,
               "delays":f"Average delay of {avg_delay:.1f} days (when late).",
-              "quality":f"{non_defective_rate:.1f}% non-defective, {defective_rate:.1f}% defective (based on {total_received} received items).",
+              "quality_dict":quality_dict,
               "supplier_risk_score":f"{risk_score} (Category: {risk_level}).",
               "key_insights":f"{key_insights_text}",
               "graph_data":graph_data
@@ -370,7 +368,7 @@ async def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:
         template='plotly_white',
         barmode='group',
         width=TILE_PX*1.25,
-        height=TILE_PX,
+        height=TILE_PX*1.25,
         margin=dict(l=20, r=20, t=40, b=30),
         # title=dict(text='Delivery Performance', font=dict(size=16)),
         legend=dict(font=dict(size=12)),
@@ -393,9 +391,9 @@ async def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:
     pie_fig.update_layout(
         template='plotly_white',
         width=TILE_PX*1.25,
-        height= TILE_PX,
+        height= TILE_PX*1.25,
         margin= dict(l=20, r=20, t=40, b=20),
-        title = dict(text='Quality Breakdown', font=dict(size=16)),
+        # title = dict(text='Quality Breakdown', font=dict(size=16)),
         legend= dict(font=dict(size=12))
     )
     pie_fig.update_traces(hoverinfo='label+percent', textinfo='value', textfont_size=20,
@@ -404,7 +402,7 @@ async def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:
     gauge_fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=risk_score,
-        title={'text': "Supplier Risk Score", 'font':{'size':16}},
+        # title={'text': "Supplier Risk Score", 'font':{'size':16}},
         number={'font':{'size':20}},
         gauge={
             'axis': {'range': [0, 1], 'tickfont':{'size':12}},
@@ -415,7 +413,7 @@ async def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:
                 {'range': [0.5,1],   'color': "#1c244b"},
             ],
             'threshold': {
-                'line': {'color': "black", 'width': 3},
+                'line': {'color': "white", 'width': 3},
                 'thickness': 0.75,
                 'value': risk_score
             }
@@ -424,7 +422,7 @@ async def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:
     gauge_fig.update_layout(
         template='plotly_white',
         width=TILE_PX*1.25,
-        height= TILE_PX,
+        height= TILE_PX*1.25,
         margin= dict(l=20, r=20, t=40, b=20)
     )
 
@@ -440,9 +438,9 @@ async def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:
     delay_fig.update_layout(
         template='plotly_white',
         width=TILE_PX*1.25,
-        height= TILE_PX,
+        height= TILE_PX*1.25,
         margin= dict(l=20, r=20, t=40, b=30),
-        title = dict(text='Avg Delay (days)', font=dict(size=16)),
+        # title = dict(text='Avg Delay (days)', font=dict(size=16)),
         yaxis = dict(title='Days',      title_font=dict(size=14), tickfont=dict(size=12))
     )
     def fig_to_bytes(fig):
