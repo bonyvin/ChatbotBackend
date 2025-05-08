@@ -1,5 +1,5 @@
 from database import Base
-from sqlalchemy import String, Column,Integer,ForeignKey,Date,Float,Boolean, Table
+from sqlalchemy import String, Column,Integer,ForeignKey,Date,Float,Boolean, Table, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 promotion_store_association = Table(
@@ -82,6 +82,8 @@ class ItemMaster(Base):
     itemDiffs2 = relationship("ItemDiffs", foreign_keys=[diffType2])
     itemDiffs3 = relationship("ItemDiffs", foreign_keys=[diffType3])
     itemPromotionDetail = relationship("PromotionDetails", back_populates="itemMaster")
+    itemPurchaseOrder=relationship("PoDetails", back_populates="itemMaster")
+
 
 class ItemSupplier(Base):
     __tablename__ = "itemSupplier"
@@ -126,7 +128,7 @@ class ShipmentHeader(Base):
     receivedBy = Column(String(225), index=True)
     status = Column(String(225), index=True)
     sourceLocation = Column(String(225), index=True)
-    destinationLocation =Column(String(255), ForeignKey("storeDetails.storeId"), unique=True)
+    destinationLocation =Column(String(255), ForeignKey("storeDetails.storeId"))
     totalQuantity = Column(Integer, index=True)
     totalCost = Column(Float, index=True)
     poHeader= relationship("PoHeader", back_populates="shipmentHeader")
@@ -172,8 +174,10 @@ class PoHeader(Base):
 class PoDetails(Base):
     __tablename__='poDetails'
     id= Column(Integer,primary_key=True, index=True,autoincrement=True)
-    itemId = Column(String(225), index=True )
-    itemQuantity=Column(Integer, index=True )
+    
+    # itemId = Column(String(225), index=True )
+    itemId = Column(String(255), ForeignKey("itemMaster.itemId"), nullable=False, index=True)
+    itemQuantity = Column(Integer, nullable=False)
     # supplierId = Column(String(225),index=True)
     itemDescription=Column(String(225), index=True )
     itemCost=Column(Float, index=True )
@@ -184,6 +188,13 @@ class PoDetails(Base):
 
     suppliers=relationship("Supplier", back_populates="poDetails")
     supplierId = Column(String(225), ForeignKey("suppliers.supplierId"))
+    # Relationship to ItemMaster, ensuring itemId exists before insertion
+    itemMaster = relationship("ItemMaster", back_populates="itemPurchaseOrder")
+        # Enforce uniqueness of itemId within the same poId
+    __table_args__ = (
+        UniqueConstraint('poId', 'itemId', name='uq_po_item_unique'),
+    )
+
 
 #INVOICE
 class InvHeader(Base):
