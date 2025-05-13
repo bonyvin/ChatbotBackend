@@ -1752,14 +1752,28 @@ def create_poDetail(poDetailData: List[poDetailsCreate], db: Session = Depends(g
     # db.refresh(db_poDetails)
     # return [db_poDetails]
 
-@app.post("/invCreation/", status_code=status.HTTP_201_CREATED)
-def create_invoice(invHeader: invHeaderCreate, db: Session = Depends(get_db)):
-    db_invHeader = models.InvHeader(**invHeader.dict())
-    db.add(db_invHeader)
-    db.commit()
-    db.refresh(db_invHeader)
-    return db_invHeader
+# @app.post("/invCreation/", status_code=status.HTTP_201_CREATED)
+# def create_invoice(invHeader: invHeaderCreate, db: Session = Depends(get_db)):
+#     db_invHeader = models.InvHeader(**invHeader.dict())
+#     db.add(db_invHeader)
+#     db.commit()
+#     db.refresh(db_invHeader)
+#     return db_invHeader
 
+@app.post("/invCreation/", status_code=status.HTTP_201_CREATED)
+def create_invoice(inv: invHeaderCreate, db: Session = Depends(get_db)):
+    store_ids = inv.storeIds
+    data = inv.dict(exclude={"storeIds"})
+    db_inv = models.InvHeader(**data)
+    db.add(db_inv)
+    db.commit()
+    db.refresh(db_inv)
+    stores = db.query(models.StoreDetails).filter(models.StoreDetails.storeId.in_(store_ids)).all()
+    db_inv.stores.extend(stores)
+    db.commit()
+    db.refresh(db_inv)
+
+    return db_inv
 @app.post("/invDetailsAdd/", status_code=status.HTTP_201_CREATED)
 def create_invDetail(invDetailData: List[invDetailsCreate], db: Session = Depends(get_db)):
     for details in invDetailData:

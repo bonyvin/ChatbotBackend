@@ -183,6 +183,7 @@ I will:
 - Prompt for any missing or incomplete information.
 - Summarize all details before submission, including the **computed Total Tax** and **Total Amount**.
 - *If an Item ID is entered more than once, I will automatically update its quantity and invoice cost instead of adding a duplicate entry.*
+- *Date Validation* - Ensure that start date is equal to or greater than {current_date}.
 ---
 
 ## Example User Scenarios

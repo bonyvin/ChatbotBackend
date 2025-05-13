@@ -8,7 +8,12 @@ promotion_store_association = Table(
     Column("promotionId", String(255), ForeignKey("promotionHeader.promotionId"), primary_key=True),
     Column("storeId", String(255), ForeignKey("storeDetails.storeId"), primary_key=True)
 )
-
+invoice_store_association = Table(
+    "invoice_store_association",
+    Base.metadata,
+    Column("invoiceId", String(255), ForeignKey("invoiceHeader.invoiceId"), primary_key=True),
+    Column("storeId", String(255), ForeignKey("storeDetails.storeId"), primary_key=True)
+)
 # STORE
 class StoreDetails(Base):
     __tablename__ = "storeDetails"
@@ -20,11 +25,11 @@ class StoreDetails(Base):
     zipCode = Column(String(20), nullable=False)
     phone = Column(String(20), nullable=False)
     
-    invoiceHeader = relationship("InvHeader", back_populates="store", uselist=False)
     shipmentHeader = relationship("ShipmentHeader", back_populates="store", uselist=False)
     # Updated relationship: many-to-many with PromotionHeader via promotion_store table
     promotions = relationship("PromotionHeader", secondary=promotion_store_association, back_populates="stores")
-
+    # invoiceHeader = relationship("InvHeader", back_populates="store", uselist=False)
+    invoices = relationship("InvHeader", secondary=invoice_store_association, back_populates="stores")
 
 # PROMOTION
 class PromotionHeader(Base):
@@ -45,7 +50,6 @@ class PromotionHeader(Base):
         foreign_keys="[PromotionDetails.promotionId]",
         back_populates="promotionHeaders"
     )
-
 class PromotionDetails(Base):
     __tablename__ = "promotionDetails"
 
@@ -62,7 +66,6 @@ class PromotionDetails(Base):
         back_populates="promotionDetailsbp"
     )
     itemMaster = relationship("ItemMaster", back_populates="itemPromotionDetail")
-
 #ITEM
 class ItemMaster(Base):
     __tablename__ = "itemMaster"
@@ -83,8 +86,6 @@ class ItemMaster(Base):
     itemDiffs3 = relationship("ItemDiffs", foreign_keys=[diffType3])
     itemPromotionDetail = relationship("PromotionDetails", back_populates="itemMaster")
     itemPurchaseOrder=relationship("PoDetails", back_populates="itemMaster")
-
-
 class ItemSupplier(Base):
     __tablename__ = "itemSupplier"
 
@@ -94,7 +95,6 @@ class ItemSupplier(Base):
     supplier = relationship("Supplier", back_populates="itemSuppliers")
     supplierId = Column(String(225), ForeignKey("suppliers.supplierId"))
     itemId = Column(String(225), ForeignKey("itemMaster.itemId"))
-
 class ItemDiffs(Base):
     __tablename__ = "itemDiffs"
 
@@ -102,7 +102,6 @@ class ItemDiffs(Base):
     diffType= Column(String(255), nullable=False)
     diffId= Column(String(255), nullable=False)
     # itemMaster=relationship("ItemMaster", back_populates="itemDiffs")
-
 #SUPPLIER
 class Supplier(Base):
     __tablename__ = "suppliers"
@@ -115,8 +114,7 @@ class Supplier(Base):
     lead_time= Column(String(255), nullable=False)
 
     poDetails=relationship("PoDetails", back_populates="suppliers")
-    itemSuppliers = relationship("ItemSupplier", back_populates="supplier")
-    
+    itemSuppliers = relationship("ItemSupplier", back_populates="supplier") 
 #SHIPMENT
 class ShipmentHeader(Base):
     __tablename__ = "shipmentHeader"
@@ -136,7 +134,6 @@ class ShipmentHeader(Base):
     poId = Column(String(225), ForeignKey("poHeader.poNumber"))
     store = relationship("StoreDetails", back_populates="shipmentHeader")
     shipmentDetails = relationship("ShipmentDetails", back_populates="shipmentHeader")
-
 class ShipmentDetails(Base):
     __tablename__='shipmentDetails'
     id= Column(Integer,primary_key=True, index=True,autoincrement=True)
@@ -152,7 +149,6 @@ class ShipmentDetails(Base):
     receiptId=Column(String(255), ForeignKey("shipmentHeader.receiptId"))
 
     invoiced = Column(Boolean, index=True, default=False) 
-    
 #PURCHASE ORDER
 class PoHeader(Base):
     __tablename__ = "poHeader"
@@ -170,7 +166,6 @@ class PoHeader(Base):
     invoiceDetails = relationship("InvDetails", back_populates="poHeader")
 
     shipmentHeader = relationship("ShipmentHeader", back_populates="poHeader")
-
 class PoDetails(Base):
     __tablename__='poDetails'
     id= Column(Integer,primary_key=True, index=True,autoincrement=True)
@@ -194,8 +189,6 @@ class PoDetails(Base):
     __table_args__ = (
         UniqueConstraint('poId', 'itemId', name='uq_po_item_unique'),
     )
-
-
 #INVOICE
 class InvHeader(Base):
     __tablename__ = "invoiceHeader"
@@ -213,8 +206,11 @@ class InvHeader(Base):
     userInvNo = Column(String(255), index=True)
     
     invoiceDetails = relationship("InvDetails", back_populates="invoiceHeader")
-    storeId = Column(String(255), ForeignKey("storeDetails.storeId"), unique=True)
-    store = relationship("StoreDetails", back_populates="invoiceHeader")
+    # storeId = Column(String(255), ForeignKey("storeDetails.storeId"), unique=True)
+    # store = relationship("StoreDetails", back_populates="invoiceHeader")
+    stores = relationship("StoreDetails", secondary=invoice_store_association, back_populates="invoices")
+
+
 # class InvHeader(Base):
 #     __tablename__='invoiceHeader'
 #     invoiceId = Column(String(225),primary_key=True,index=True)

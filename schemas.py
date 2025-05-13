@@ -137,7 +137,8 @@ class invHeaderCreate(BaseModel):
     total_tax:float
     total_amount:float
     userInvNo:str
-    storeId:str
+    # storeId:str
+    storeIds: List[str]
 
 
 class invDetailsCreate(BaseModel):
