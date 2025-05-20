@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Document Notification</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background-color: #f4f4f4;
+      color: #333;
+    }
+
+    .container {
+      width: 90%;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 2rem;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+    }
+
+    p {
+      margin: 0 0 1.2rem;
+      line-height: 1.6;
+      font-size: 1rem;
+    }
+
+    .footer {
+      margin-top: 2.5rem;
+      font-size: 1rem;
+    }
+
+    .footer span {
+      display: block;
+      margin-bottom: 0.2rem;
+    }
+
+    .auto {
+      margin-top: 2rem;
+      font-size: 0.875rem;
+      color: #777;
+      font-style: italic;
+    }
+
+    /* Responsive Adjustments */
+    @media (max-width: 768px) {
+      .container {
+        padding: 1.5rem;
+      }
+
+      p, .footer {
+        font-size: 0.95rem;
+      }
+
+      .auto {
+        font-size: 0.8rem;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 1rem;
+        margin: 20px auto;
+      }
+
+      p {
+        font-size: 0.9rem;
+      }
+
+      .footer {
+        font-size: 0.9rem;
+        margin-top: 2rem;
+      }
+
+      .auto {
+        font-size: 0.75rem;
+        margin-top: 1.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <p>Hi,</p>
+    <p>
+      Please find attached the <strong>{{documentType}}</strong> document for your reference.
+    </p>
+    <p>
+      If you have any questions or need further assistance, feel free to contact our support team.
+    </p>
+
+    <div class="footer">
+      <span>Best regards,</span>
+      <span><strong>Experience X Support Team</strong></span>
+    </div>
+
+    <p class="auto">
+      This is an auto-generated message. Please do not reply to this email.
+    </p>
+  </div>
+</body>
+</html>

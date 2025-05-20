@@ -440,6 +440,7 @@ I will:
 - *Standardize formats*, such as:
   - Converting relative dates like "2 weeks from now" or "3 days from now" into "dd/mm/yyyy".
   - Converting different date formats like "MM/DD/YYYY", "YYYY/MM/DD", "DD.MM.YYYY", "DD-MM-YYYY", "Month Day, Year", "Day, Month DD, YYYY", "YYYY-MM-DD",etc to  "dd/mm/yyyy". 
+- *Date Validation* - Ensure that the date is equal to or greater than {current_date}.
 - Validate that the number of items matches the number of quantities and invoice costs.
 - Prompt for any missing or incomplete information.
 - Summarize all details before submission, including the **computed Total Tax** and **Total Amount**.
@@ -457,9 +458,9 @@ I will:
 - Validate the format and ensure that the number of items, quantities, and invoice costs match.
 - Standardize the date format.
 - Calculate the totals:  
-  - For ID123: 5 × 500.00 = 2500.00  
-  - For ID124: 10 × 1000.00 = 10000.00  
-  - For ID125: 3 × 600.00 = 1800.00  
+  - For ID123: 5 * 500.00 = 2500.00  
+  - For ID124: 10 * 1000.00 = 10000.00  
+  - For ID125: 3 * 600.00 = 1800.00  
   - **Sum of items cost** = 2500.00 + 10000.00 + 1800.00 = 14800.00  
   - **Total Tax** = 10% of 14800.00 = 1480.00  
   - **Total Amount** = 14800.00 + 1480.00 = 16280.00  
@@ -669,7 +670,8 @@ Let's validate the details:
 Missing details (if any) will be listed below.  
 
 Would you like to submit this information?  
-If you respond with 'Yes', I'll confirm with "Invoice created successfully. Thank you for choosing us."
+If you respond with 'Yes', I'll confirm with "Invoice created successfully. Thank you for choosing us."
+Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
 
 
 """
@@ -802,6 +804,8 @@ The fields and their expected formats are:
     - **Item ID** (alphanumeric, may appear as "Product Code", "SKU", "Item No.")
     - **Quantity** (numeric, may appear as "Qty", "Quantity Ordered", "Units")
     - **Invoice Cost** (numeric, may appear as "Item Cost", "Total Cost per Item")
+- **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
+
 
 Use the exact field names as provided above. If a value is missing, set "value" to null (or [] for arrays) and "is_example" to false.
 

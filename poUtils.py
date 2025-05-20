@@ -76,6 +76,9 @@ You can provide all the details at once, separated by commas, or enter them one 
 - *Detect and update duplicate Item IDs* instead of adding new entries:  
   - If an *Item ID is entered multiple times, I will **sum its quantity and cost*** instead of creating duplicates.  
 - *Prompt for missing information* if required.  
+- *Date Validation* 
+    # - Ensure that estimated delivery date is not in the past and is the same as or later than {current_date}.
+    - Validate that the estimated delivery date equals the {current_date} plus the {lead_time}. Ensure the user-entered date matches or is greater than this value.
 - *Summarize all details before final submission.*  
 
 ---
@@ -203,6 +206,7 @@ Missing details (if any) will be listed below.
 
 Would you like to submit this information?  
 If you respond with 'Yes', I'll confirm with *"Purchase Order created successfully. Thank you for choosing us."*  
+Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
 """
 today = datetime.datetime.today().strftime("%d/%m/%Y")
 template_PO=template_PO_without_date.replace("{current_date}", today)
@@ -218,7 +222,8 @@ DEFAULT_PO_STRUCTURE = {
             "itemQuantity": None,
             "itemCost": None
         }
-    ]  # List of items with details
+    ],  # List of items with details
+    "email":""
 }
  
 previous_po_details = {}
@@ -242,6 +247,8 @@ The fields and their expected formats are:
     - **Item ID** → (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
     - **Quantity** → (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
     - **Cost Per Unit** → (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
+- **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
+
 
 Use the exact field names as provided above. If a value is missing, set "value" to null (or [] for arrays) and "is_example" to false.
 

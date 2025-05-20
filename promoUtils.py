@@ -184,7 +184,7 @@ Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline yo
 
 ### *Scenario 4: Supplier Check*  
 *User:* "Promote style ITEM004"  
-*Response:* Display details for ITEM004 (Men's Trousers – Regular Fit) and retrieve the corresponding supplier details from our itemsupplier table.
+*Response:* Display details for ITEM004 (Men's Trousers - Regular Fit) and retrieve the corresponding supplier details from our itemsupplier table.
 
 ### *Scenario 5: Duplicate Merge*  
 *User:* "SKUs: ITEM001, ITEM002, ITEM001"  
@@ -887,7 +887,7 @@ Use the exact field names as given above.
 Return the response as a valid JSON object where each key is one of the fields and its value is an object in the form:
     "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}
   
-If a field’s value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
+If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
     """
     
     try:

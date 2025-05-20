@@ -95,33 +95,7 @@ async def plot_png():
     risk_score = 0.1
     graphs = await plot_all_graphs(fill_rate,pending_rate,non_defective_rate,defective_rate,avg_delay,risk_score)
     return {"graphs": graphs}
-
-    # def fig_to_bytes(fig):
-    #     buf = io.BytesIO()
-    #     fig.write_image(buf, format="png")
-    #     return buf.getvalue()
-
-    # # Render each figure to raw bytes
-    # bar_bytes   = fig_to_bytes(graphs["bar_fig"])
-    # pie_bytes   = fig_to_bytes(graphs["pie_fig"])
-    # gauge_bytes = fig_to_bytes(graphs["gauge_fig"])
-    # delay_bytes = fig_to_bytes(graphs["delay_fig"])
-
-    # # Base-64 encode & add a data URI prefix so it's directly displayable in browsers
-    # def to_data_uri(img_bytes):
-    #     b64 = base64.b64encode(img_bytes).decode("ascii")
-    #     return f"data:image/png;base64,{b64}"
-
-    # return JSONResponse(
-    #     content={
-    #         "bar_chart"   : to_data_uri(bar_bytes),
-    #         "pie_chart"   : to_data_uri(pie_bytes),
-    #         "gauge_chart" : to_data_uri(gauge_bytes),
-    #         "delay_chart" : to_data_uri(delay_bytes),
-    #     }
-    # )
     
-
 #Email Functionality
 @app.post("/filenew")
 async def send_file_new(
@@ -143,8 +117,29 @@ async def send_file_new(
     )
 
     fm = FastMail(conf)
-    await fm.send_message(message, template_name="email.html")
+    await fm.send_message(message, template_name="email-document.html")
     return JSONResponse(status_code=200, content={"message": "Email has been sent."})
+# async def send_file_new(
+#     file: UploadFile = File(...),
+#     email: EmailStr = Form(...),
+#     body: str = Form(...)
+# ) -> JSONResponse:
+#     try:
+#         body_dict: Dict[str, Any] = json.loads(body)
+#     except json.JSONDecodeError:
+#         return JSONResponse(status_code=400, content={"message": "Invalid JSON in 'body' field."})
+
+#     message = MessageSchema(
+#         subject="Fastapi-Mail module",
+#         recipients=[email],
+#         template_body=body_dict,
+#         subtype=MessageType.html,
+#         attachments=[file]  # ✅ Pass UploadFile directly
+#     )
+
+#     fm = FastMail(conf)
+#     await fm.send_message(message, template_name="email.html")
+#     return JSONResponse(status_code=200, content={"message": "Email has been sent."})
 
 class EmailSchema(BaseModel):
     email: List[EmailStr]
@@ -170,49 +165,6 @@ async def send_with_template(email: EmailSchemaBody) -> JSONResponse:
     fm = FastMail(conf)
     await fm.send_message(message, template_name="email.html") 
     return JSONResponse(status_code=200, content={"message": "email has been sent"})
- 
-# @app.post("/file")
-# async def send_file(
-
-#     file: UploadFile = File(...),
-#     email:EmailStr = Form(...),
-#     ) -> JSONResponse:
-
-#     message = MessageSchema(
-#             subject="Fastapi mail module",
-#             recipients=[email],
-#             body="Simple background task",
-#             subtype=MessageType.html,
-#             attachments=[file])
-
-#     fm = FastMail(conf)
-#     await fm.send_message(message, template_name="email.html") 
-#     return JSONResponse(status_code=200, content={"message": "email has been sent"})
-
-# @app.post("/send-email/attachment")
-# def send_email_with_attachment(background_tasks: BackgroundTasks, subject: str, email_to: str, body: dict, attachment_path: str):
-#     try:
-#         # Read the PDF file in binary mode
-#         with open(attachment_path, "rb") as f:
-#             file_data = f.read()
-
-#         # Create the attachment tuple: (filename, content, MIME type)
-#         attachment = (os.path.basename(attachment_path), file_data, "application/pdf")
-#     except Exception as e:
-#         print(f"Error reading attachment: {e}")
-#         return {"error": "Attachment could not be read."}
-
-#     # Compose the message with attachment
-#     message = MessageSchema(
-#         subject=subject,
-#         recipients=[email_to],
-#         template_body=body,  # Updated field
-#         subtype='html',
-#         attachments=[attachment]
-#     )
-#     fm = FastMail(conf)
-#     background_tasks.add_task(fm.send_message, message, template_name='email.html')
-#     return {"status": "Email with attachment initiated"}
 
 #Store
 @app.post("/storeCreation/", status_code=status.HTTP_201_CREATED)
@@ -772,111 +724,6 @@ def db_query(query: str, params: dict = None) -> List:
     except Exception as e:
         print(f"Database error: {e}")
         return []
-# Optimized core functions
-# def find_attributes(question: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
-#     """Find attributes, values, and their ID in a single optimized flow."""
-#     print(f"\nProcessing query: '{question}'")
-    
-#     # Get attribute metadata in single query
-#     attr_data = db_query(
-#         "SELECT diffType, diffId, id FROM itemdiffs GROUP BY diffType, diffId"
-#     )
-    
-#     if not attr_data:
-#         print("No attribute data found in database")
-#         return (None, None, None)
-
-#     # Build optimized attribute structure {diffType: {diffId: id}}
-        
-#     attribute_map = {}
-#     for diff_type, diff_id, id_val in attr_data:
-#         key = diff_id.lower()  # Store diffId in lowercase
-#         attribute_map.setdefault(diff_type, {})[key] = id_val
-
-#     print(f"Attribute map: {attribute_map.keys()}")
-    
-#     # Detect attributes using optimized function
-#     attr, value = detect_attribute(question, attribute_map)
-#     if not attr or not value:
-#         return (None, None, None)
-
-#     # Get ID from pre-loaded map
-#     item_id = attribute_map.get(attr, {}).get(value)
-#     logging.info("Find attributes: %s %s %s", attr, value, item_id)
-#     return (attr, value, item_id)
-
-# def detect_attribute(question: str, attribute_map: Dict) -> Tuple[Optional[str], Optional[str]]:
-#     """Optimized attribute detection with fuzzy matching."""
-#     if not attribute_map:
-#         return (None, None)
-
-#     try:
-#         # Build a string for debugging purposes (could also be logged)
-#         attr_desc = "\n".join(
-#             f"- {attr}: {', '.join(values.keys())}" 
-#             for attr, values in attribute_map.items()
-#         )
-        
-#         # Here, instead of relying solely on a prompt,
-#         # we perform fuzzy matching for known attributes.
-#         # For each attribute type (e.g., 'itemDepartment'), check if any of its values
-#         # closely match substrings in the question.
-#         detected_attr = None
-#         detected_value = None
-#         for attr, values in attribute_map.items():
-#             for candidate_value in values.keys():
-#                 # Use get_close_matches to see if candidate_value is similar to a word in the question.
-#                 # You may want to split the question into words or use the full question.
-#                 matches = difflib.get_close_matches(candidate_value.lower(), question.lower().split(), cutoff=0.6)
-#                 if matches:
-#                     detected_attr = attr
-#                     detected_value = candidate_value
-#                     break
-#             if detected_attr and detected_value:
-#                 break
-        
-#         # If fuzzy matching didn't find anything, fallback to the original prompt-based approach:
-#         if not detected_attr or not detected_value:
-#             prompt = f"""Analyze query: "{question}"
-#             Identify attributes from:
-#             {attr_desc}
-#             Respond in JSON format: {{"attribute": "...", "value": "..."}}"""
-    
-#             response = client.chat.completions.create(
-#                  model="gpt-4o",
-#                 messages=[{
-#                     "role": "system",
-#                     "content": "You are a retail data analyst. Identify product attributes."
-#                 }, {
-#                     "role": "user", 
-#                     "content": prompt
-#                 }],
-#                 response_format={"type": "json_object"},
-#                 temperature=0.1
-#             )
-#             result = json.loads(response.choices[0].message.content)
-#             detected_attr = result.get('attribute')
-#             detected_value = result.get('value')
-
-#         non_attribute_fields = ['department', 'class', 'sub_class', 'brand']
-#         if detected_attr in non_attribute_fields:
-#             # Bypass itemdiffs validation for these fields
-#             return (detected_attr, detected_value)
-#         # Validate against known data (perform a fuzzy check if the detected value is not an exact match)
-#         possible_values = list(attribute_map.get(detected_attr, {}).keys())
-#         close_matches = difflib.get_close_matches(detected_value, possible_values, n=1, cutoff=0.6)
-#         logging.info("Detect attributes: %s", close_matches )
-#         if close_matches:
-#             detected_value = close_matches[0]
-#         else:
-#             print(f"Invalid detection: {detected_attr}/{detected_value}")
-#             return (None, None)
-    
-#         return (detected_attr, detected_value)
-    
-#     except Exception as e:
-#         print(f"Detection error: {e}")
-#         return (None, None)
 
 def detect_attribute(question: str, attribute_map: Dict) -> Tuple[List[str], List[str]]:
     """Optimized attribute detection for multiple attributes.
@@ -1609,6 +1456,8 @@ def query_database_function(question: str) -> str:
         print("Query error: ",{str(e)})
         return f"Error executing query: {str(e)}"
 
+user_supplier_cache = {}
+
 @app.post("/chat")
 async def chat_with_po_assistant(request: ChatRequest):
     user_id = request.user_id
@@ -1618,6 +1467,7 @@ async def chat_with_po_assistant(request: ChatRequest):
     if user_id not in chat_histories:
         chat_histories[user_id] = []
         user_po_details[user_id] = DEFAULT_PO_STRUCTURE.copy()
+        user_supplier_cache[user_id] = set()
     
     chat_histories[user_id].append(f"User: {user_message}")
     conversation = "\n".join(chat_histories[user_id])
@@ -1688,6 +1538,31 @@ async def chat_with_po_assistant(request: ChatRequest):
 
         chat_histories[user_id].append(f"Bot: {bot_reply}")
         print("PO JSON:", po_json, "User ID:", user_id)
+
+        supplier_id= po_json.get("Supplier ID", "")
+        print("Supplier ID: ",supplier_id,po_json["Supplier ID"])
+        # Fetch PO items only if PO number is not empty and not fetched before
+        if supplier_id and supplier_id not in user_supplier_cache[user_id]:
+            lead_time=fetch_lead_time(supplier_id)
+            print("Inside supplier loop, lead time: ",supplier_id,lead_time)
+            if lead_time:  # Only process if po_items is not empty
+                messages.append({
+                    "role": "user",  # Simulate user input
+                    "content": f"lead time: {lead_time}"
+                    #change
+                })
+                # 
+                # Mark this PO as processed
+                user_supplier_cache[user_id].add(supplier_id)
+                print("Messages in po chat: ",messages)
+                # Second API call with updated template
+                second_response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=500
+                )
+                bot_reply = second_response.choices[0].message.content
 
         # Determine submission status
         if "Would you like to submit" in bot_reply:
@@ -1973,6 +1848,20 @@ def fetch_po_item_ids(po_number: str) -> list:
         print(f"PO fetch error: {str(e)}")
         return []
     
+def fetch_lead_time(supplier_id: str) -> list:
+    """Fetch PO items with error handling"""
+    try:
+        query = f"""
+        SELECT lead_time
+        FROM suppliers 
+        WHERE supplierId = '{supplier_id}'
+        """
+        result = execute_mysql_query(query)
+        return [dict(item) for item in result] if result else []
+    except Exception as e:
+        print(f"PO fetch error: {str(e)}")
+        return []
+    
 invoice_chat_histories = {}
 user_invoice_details = {}
 
@@ -2186,24 +2075,9 @@ async def generate_response_new(request: ChatRequest):
             po_items = fetch_po_item_ids(po_number)
             if po_items:  # Only process if po_items is not empty
                 po_items_json = json.dumps({"po_items": po_items})
-
-                # Append PO response to messages
-                # messages.append({
-                #     "role": "function",
-                #     "name": "fetch_po_item_ids",
-                #     "content": po_items_json
-                # })
-                # print("New messages: ",messages)
                 po_item_ids = [item["itemId"] for item in po_items]
                 po_item_ids_string = ",".join(po_item_ids)
-                # updated_template = template_5_new.replace(
-                #     "{po_item_list}", 
-                #     f"**PO Items to Include:** {po_item_ids_string}"
-                # )
                 print("po_item_ids_string: ",po_item_ids_string,"po_items",po_items )
-                # print("updated_template: ",updated_template)
-                # # Update messages with modified template
-                # messages[0]["content"] = updated_template
                 messages.append({
                     "role": "user",  # Simulate user input
                     "content": f"Items: {po_item_ids_string}"
