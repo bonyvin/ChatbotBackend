@@ -6,7 +6,7 @@ from utils import gpt_response,extract_information,conversation,checkValidation,
 from poUtils import template_PO,DEFAULT_PO_STRUCTURE,categorize_po_details,previous_po_details
 from pydantic import BaseModel, EmailStr;
 from models import Base, StoreDetails,User,PoDetails,PoHeader,InvHeader,InvDetails,Supplier,ShipmentHeader,ItemDiffs,ItemSupplier,ItemMaster,PromotionDetails,PromotionHeader
-from schemas import StoreDetailsSchema, UserSchema,poHeaderCreate,poDetailsCreate,invHeaderCreate,invDetailsCreate,poDetailsSearch,invDetailsSerach,ChatRequest,SupplierCreate,ShipmentHeader,ShipmentDetails,ItemDiffsSchema,ItemSupplierSchema,ItemMasterSchema,PromotionDetailsSchema,PromotionHeaderSchema
+from schemas import ChatRequestUser, StoreDetailsSchema, UserSchema,poHeaderCreate,poDetailsCreate,invHeaderCreate,invDetailsCreate,poDetailsSearch,invDetailsSerach,ChatRequest,SupplierCreate,ShipmentHeader,ShipmentDetails,ItemDiffsSchema,ItemSupplierSchema,ItemMasterSchema,PromotionDetailsSchema,PromotionHeaderSchema
 from schemas import ShipmentDetails as ShipmentDetailsSchema
 from database import engine,SessionLocal,get_db
 from promoUtils import extract_and_classify_promo_details, template_Promotion,categorize_promo_details,previous_promo_details,categorize_promo_details_fun_call,categorize_promo_details_new
@@ -81,9 +81,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-#PO Chatbot Functions
-chat_histories = {}
-user_po_details = {}
+
 
 @app.get("/plot")
 async def plot_png():
@@ -1012,6 +1010,7 @@ async def supplier_risk(supplierId:str):
 
     return {"insights":insights}
 
+promo_email_cache = defaultdict(set)
 @app.post("/promo-chat")
 async def handle_promotion_chat(request: dict):
     # Assuming request has keys "user_id" and "message"
@@ -1162,6 +1161,10 @@ async def handle_promotion_chat(request: dict):
         user_promo_details[user_id] = await categorize_promo_details_new(bot_reply, user_id)
         # user_promo_details[user_id] = await categorize_promo_details(bot_reply, user_id)
         promo_json = user_promo_details[user_id]
+        promo_email=promo_json["Email"]
+        if(promo_email):
+            promo_email_cache[user_id].add(promo_email)
+
         classification_result = classify_query(user_message, conversation)
 
         promo_states[user_id].append(f"Bot: {bot_reply}")
@@ -1181,7 +1184,8 @@ async def handle_promotion_chat(request: dict):
             "promo_json": promo_json,
             "submissionStatus": submissionStatus,
             "query_called": query_called,
-            "classification_result": classification_result
+            "classification_result": classification_result,
+            "promo_email":promo_email
         }
 
     except Exception as e:
@@ -1458,6 +1462,141 @@ def query_database_function(question: str) -> str:
 
 user_supplier_cache = {}
 
+
+# @app.post("/chat")
+# async def chat_with_po_assistant(request: ChatRequest):
+#     user_id = request.user_id
+#     user_message = request.message
+
+#     # Maintain user session
+#     if user_id not in chat_histories:
+#         chat_histories[user_id] = []
+#         user_po_details[user_id] = DEFAULT_PO_STRUCTURE.copy()
+#         user_supplier_cache[user_id] = set()
+    
+#     chat_histories[user_id].append(f"User: {user_message}")
+#     conversation = "\n".join(chat_histories[user_id])
+
+#     try:
+#         # First API call - with function definition
+#         messages = [
+#             {"role": "system", "content": template_PO},
+#             {"role": "user", "content": conversation}
+#         ]
+
+#         functions = [{
+#             "name": "query_database",
+#             "description": "Retrieve data from the database using SQL queries",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                     "question": {
+#                         "type": "string", 
+#                         "description": "Natural language question requiring database data"
+#                     }
+#                 },
+#                 "required": ["question"]
+#             }
+#         }]
+
+#         response = client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=messages,
+#             functions=functions,
+#             function_call="auto",
+#             temperature=0.7,
+#             max_tokens=500
+#         )
+
+#         response_message = response.choices[0].message
+#         bot_reply = response_message.content
+#         function_call = response_message.function_call
+#         query_called = False
+
+#         # Handle function call
+#         if function_call and function_call.name == "query_database":
+#             args = json.loads(function_call.arguments)
+#             query_result = query_database_function(args["question"])
+#             query_called = True
+
+#             # Append function response to messages
+#             messages.append({
+#                 "role": "function", 
+#                 "name": "query_database",
+#                 "content": query_result
+#             })
+
+#             # Second API call with function result
+#             second_response = client.chat.completions.create(
+#                 model="gpt-4o",
+#                 messages=messages,
+#                 temperature=0.7,
+#                 max_tokens=500
+#             )
+#             bot_reply = second_response.choices[0].message.content
+
+#         # Retain po_json from previous interaction if query_called is True
+#         if not query_called:
+#             user_po_details[user_id] = await categorize_po_details(bot_reply, user_id)
+
+#         po_json = user_po_details[user_id]  # Assign retained po_json
+
+#         chat_histories[user_id].append(f"Bot: {bot_reply}")
+#         print("PO JSON:", po_json, "User ID:", user_id)
+
+#         # supplier_id= po_json.get("Supplier ID", "")
+#         # print("Supplier ID: ",supplier_id,po_json["Supplier ID"])
+#         # # Fetch PO items only if PO number is not empty and not fetched before
+#         # if supplier_id and supplier_id not in user_supplier_cache[user_id]:
+#         #     lead_time=fetch_lead_time(supplier_id)
+#         #     print("Inside supplier loop, lead time: ",supplier_id,lead_time)
+#         #     if lead_time:  # Only process if po_items is not empty
+#         #         messages.append({
+#         #             "role": "user",  # Simulate user input
+#         #             "content": f"lead time: {lead_time}"
+#         #             #change
+#         #         })
+#         #         # 
+#         #         # Mark this PO as processed
+#         #         user_supplier_cache[user_id].add(supplier_id)
+#         #         print("Messages in po chat: ",messages)
+#         #         # Second API call with updated template
+#         #         second_response = client.chat.completions.create(
+#         #             model="gpt-3.5-turbo",
+#         #             messages=messages,
+#         #             temperature=0.7,
+#         #             max_tokens=500
+#         #         )
+#         #         bot_reply = second_response.choices[0].message.content
+
+#         # Determine submission status
+#         if "Would you like to submit" in bot_reply:
+#             submissionStatus = "pending"
+#         elif "Purchase Order created successfully" in bot_reply:
+#             submissionStatus = "submitted"
+#         elif "I want to change something" in bot_reply:
+#             submissionStatus = "cancelled"
+#         else:
+#             submissionStatus = "in_progress"  # Default state if no clear intent is detected
+        
+#         print("PO submission status:", submissionStatus)
+
+#         return {
+#             "user_id": user_id,
+#             "bot_reply": bot_reply,
+#             "chat_history": chat_histories,
+#             "po_json": po_json,  # Retains values if query_called is True
+#             "submissionStatus": submissionStatus
+#         }
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+#PO Chatbot Functions
+chat_histories = {}
+user_po_details = {}
+po_email_cache = defaultdict(set)
+
 @app.post("/chat")
 async def chat_with_po_assistant(request: ChatRequest):
     user_id = request.user_id
@@ -1467,7 +1606,6 @@ async def chat_with_po_assistant(request: ChatRequest):
     if user_id not in chat_histories:
         chat_histories[user_id] = []
         user_po_details[user_id] = DEFAULT_PO_STRUCTURE.copy()
-        user_supplier_cache[user_id] = set()
     
     chat_histories[user_id].append(f"User: {user_message}")
     conversation = "\n".join(chat_histories[user_id])
@@ -1535,34 +1673,11 @@ async def chat_with_po_assistant(request: ChatRequest):
             user_po_details[user_id] = await categorize_po_details(bot_reply, user_id)
 
         po_json = user_po_details[user_id]  # Assign retained po_json
-
         chat_histories[user_id].append(f"Bot: {bot_reply}")
         print("PO JSON:", po_json, "User ID:", user_id)
-
-        supplier_id= po_json.get("Supplier ID", "")
-        print("Supplier ID: ",supplier_id,po_json["Supplier ID"])
-        # Fetch PO items only if PO number is not empty and not fetched before
-        if supplier_id and supplier_id not in user_supplier_cache[user_id]:
-            lead_time=fetch_lead_time(supplier_id)
-            print("Inside supplier loop, lead time: ",supplier_id,lead_time)
-            if lead_time:  # Only process if po_items is not empty
-                messages.append({
-                    "role": "user",  # Simulate user input
-                    "content": f"lead time: {lead_time}"
-                    #change
-                })
-                # 
-                # Mark this PO as processed
-                user_supplier_cache[user_id].add(supplier_id)
-                print("Messages in po chat: ",messages)
-                # Second API call with updated template
-                second_response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages,
-                    temperature=0.7,
-                    max_tokens=500
-                )
-                bot_reply = second_response.choices[0].message.content
+        po_email=po_json["Email"]
+        if(po_email):
+            po_email_cache[user_id].add(po_email)
 
         # Determine submission status
         if "Would you like to submit" in bot_reply:
@@ -1571,6 +1686,8 @@ async def chat_with_po_assistant(request: ChatRequest):
             submissionStatus = "submitted"
         elif "I want to change something" in bot_reply:
             submissionStatus = "cancelled"
+        elif po_email and po_email not in po_email_cache[user_id]:
+            submissionStatus = "pending"
         else:
             submissionStatus = "in_progress"  # Default state if no clear intent is detected
         
@@ -1581,7 +1698,9 @@ async def chat_with_po_assistant(request: ChatRequest):
             "bot_reply": bot_reply,
             "chat_history": chat_histories,
             "po_json": po_json,  # Retains values if query_called is True
-            "submissionStatus": submissionStatus
+            "submissionStatus": submissionStatus,
+            "po_email":po_email
+
         }
 
     except Exception as e:
@@ -1754,6 +1873,20 @@ async def clearConversation(submitted:str):
     previous_po_details.clear()
     previous_promo_details.clear()
     submissionStatus = "not submitted"
+    return {"conversation":conversation,"submissionStatus":"not submitted","chat_history":chat_histories}
+
+@app.post("/clearDataNew")
+async def clearConversationNew(request: ChatRequestUser):
+    user_id = request.user_id
+    chat_histories.clear()
+    previous_invoice_details.clear()
+    # previous_po_details.clear()
+    previous_promo_details.clear()
+    email_value = previous_po_details[user_id].get("Email")
+    previous_po_details[user_id].clear()
+    if email_value is not None:
+        previous_po_details[user_id]["Email"] = email_value
+    print("email and po:",email_value,previous_po_details)
     return {"conversation":conversation,"submissionStatus":"not submitted","chat_history":chat_histories}
 
 @app.post("/testSubmission")

@@ -1,4 +1,5 @@
 
+import copy
 import os
 import datetime
 import openai
@@ -854,6 +855,95 @@ Extract and structure the following details from this Promotion text. The JSON k
         print(f"Error during extraction: {e}")
         return previous_promo_details.get(user_id, DEFAULT_PROMO_STRUCTURE.copy())
 
+# async def categorize_promo_details_new(extracted_text: str, user_id: str):
+#     client = openai.AsyncOpenAI()
+    
+#     # Single combined prompt:
+#     prompt = f"""
+# Extract the following promotion details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
+#   - "value": the extracted field value (or null if missing).
+#   - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
+  
+# The fields and their expected formats are:
+  
+#   - **Promotion Type**: one of [Simple | Buy X/Get Y | Threshold | GWP (Gift with Purchase)]
+#   - **Hierarchy Type**:  An array containing one or more of the following: [Department, Class, Sub Class]
+#   - **Hierarchy Value**: An array of one or more specific values for the selected Hierarchy Type (e.g., for Department, ["T-Shirt", "Shirt"])
+#   - **Brand**: An array of product brands (e.g., ["FashionX", "H&M", "Zara", "Uniqlo"])
+#   - **Items**: Array of SKUs/Item IDs formatted as ['ITEM001', 'ITEM002']
+#   - **Excluded Items**: Array of SKUs/Item IDs formatted as ['ITEM003', 'ITEM004']
+#   - **Discount Type**: one of [% Off | Fixed Price | Buy One Get One Free]
+#   - **Discount Value**: Numerical amount (convert colloquial terms such as "50 bucks off" to "$50 Off")
+#   - **Start Date**: (dd/mm/yyyy)
+#   - **End Date**: (dd/mm/yyyy)
+#   - **Stores**: Array of Store IDs formatted as ['STORE001', 'STORE002']
+#   - **Excluded Stores**: Array of Store IDs formatted as ['STORE001', 'STORE002']
+#   - **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
+
+# Use the exact field names as given above.
+
+# **Promotion Text:**
+# {extracted_text}
+
+# Return the response as a valid JSON object where each key is one of the fields and its value is an object in the form:
+#     "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}
+  
+# If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
+#     """
+    
+#     try:
+#         response = await client.chat.completions.create(
+#             model="gpt-4-turbo",
+#             messages=[
+#                 {"role": "system", "content": "Extract promotion details with per-field example flags as described."},
+#                 {"role": "user", "content": prompt}
+#             ],
+#             response_format={"type": "json_object"}
+#         )
+#         raw_response = response.choices[0].message.content.strip()
+#         print("Raw combined response:", raw_response)
+        
+#         # Clean JSON response if wrapped in a code block
+#         if raw_response.startswith("```json"):
+#             raw_response = raw_response[7:-3].strip()
+        
+#         extracted_data = json.loads(raw_response)
+#     except Exception as e:
+#         print(f"Error during combined extraction: {e}")
+#         return previous_promo_details.get(user_id, DEFAULT_PROMO_STRUCTURE.copy())
+    
+#     # Process the returned structure:
+#     # For each field, if "is_example" is true, set its value to null (or [] for array types)
+#     processed_data = {}
+#     for field, details in extracted_data.items():
+#         is_example = details.get("is_example", False)
+#         value = details.get("value")
+        
+#         # Determine the expected type from the default structure.
+#         default_value = DEFAULT_PROMO_STRUCTURE.get(field)
+#         if is_example:
+#             # For example fields, use the default empty value.
+#             processed_data[field] = [] if isinstance(default_value, list) else None
+#         else:
+#             processed_data[field] = value if value is not None else ( [] if isinstance(default_value, list) else None )
+    
+#     # Merge processed data with previous details (if needed) ensuring all keys are present
+#     merged_data = DEFAULT_PROMO_STRUCTURE.copy()
+#     merged_data.update(processed_data)
+    
+#     # Optional: Check if all primary fields are empty. If so, fallback to previous details.
+#     primary_fields = [
+#         "Promotion Type", "Hierarchy Type", "Hierarchy Value", "Brand", 
+#         "Items", "Excluded Items", "Discount Type", "Discount Value", 
+#         "Start Date", "End Date", "Stores", "Excluded Stores","Email"
+#     ]
+#     if all(not merged_data.get(field) for field in primary_fields):
+#         print("No valid data extracted; returning previous data.")
+#         return previous_promo_details.get(user_id, DEFAULT_PROMO_STRUCTURE.copy())
+    
+#     previous_promo_details[user_id] = merged_data
+#     return merged_data
+
 async def categorize_promo_details_new(extracted_text: str, user_id: str):
     client = openai.AsyncOpenAI()
     
@@ -899,49 +989,63 @@ If a field's value is missing, return null (or an empty array for fields expecte
             ],
             response_format={"type": "json_object"}
         )
-        raw_response = response.choices[0].message.content.strip()
-        print("Raw combined response:", raw_response)
-        
-        # Clean JSON response if wrapped in a code block
-        if raw_response.startswith("```json"):
-            raw_response = raw_response[7:-3].strip()
-        
-        extracted_data = json.loads(raw_response)
+        raw = response.choices[0].message.content.strip()
+        # strip any ```json ... ``` wrappers
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[-1].rsplit("```", 1)[0].strip()
+
+        extracted_data = json.loads(raw)
+
     except Exception as e:
-        print(f"Error during combined extraction: {e}")
-        return previous_promo_details.get(user_id, DEFAULT_PROMO_STRUCTURE.copy())
-    
-    # Process the returned structure:
-    # For each field, if "is_example" is true, set its value to null (or [] for array types)
-    processed_data = {}
-    for field, details in extracted_data.items():
-        is_example = details.get("is_example", False)
-        value = details.get("value")
-        
-        # Determine the expected type from the default structure.
-        default_value = DEFAULT_PROMO_STRUCTURE.get(field)
-        if is_example:
-            # For example fields, use the default empty value.
-            processed_data[field] = [] if isinstance(default_value, list) else None
-        else:
-            processed_data[field] = value if value is not None else ( [] if isinstance(default_value, list) else None )
-    
-    # Merge processed data with previous details (if needed) ensuring all keys are present
-    merged_data = DEFAULT_PROMO_STRUCTURE.copy()
-    merged_data.update(processed_data)
-    
-    # Optional: Check if all primary fields are empty. If so, fallback to previous details.
-    primary_fields = [
-        "Promotion Type", "Hierarchy Type", "Hierarchy Value", "Brand", 
-        "Items", "Excluded Items", "Discount Type", "Discount Value", 
-        "Start Date", "End Date", "Stores", "Excluded Stores","Email"
-    ]
-    if all(not merged_data.get(field) for field in primary_fields):
-        print("No valid data extracted; returning previous data.")
-        return previous_promo_details.get(user_id, DEFAULT_PROMO_STRUCTURE.copy())
-    
-    previous_promo_details[user_id] = merged_data
-    return merged_data
+        print(f"[categorize_promo] extraction error: {e!r}")
+        # fallback: full default or last saved
+        return previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+
+    # 2) If *all* fields are null/empty in the LLM output → immediately fallback
+    all_empty = all(
+        (details.get("is_example", False) or details.get("value") in (None, [], "")) 
+        for details in extracted_data.values()
+    )
+    if all_empty:
+        print("[categorize_promo] all fields empty → returning previous data.")
+        return previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+
+    # 3) Clean & map into our structure
+    try:
+        processed = {}
+        for field, details in extracted_data.items():
+            is_ex = details.get("is_example", False)
+            val   = details.get("value")
+
+            default = DEFAULT_PROMO_STRUCTURE.get(field)
+            if is_ex:
+                # example entries get reset
+                processed[field] = [] if isinstance(default, list) else None
+            else:
+                # preserve explicit nulls vs empty lists
+                if val is None:
+                    processed[field] = [] if isinstance(default, list) else None
+                else:
+                    processed[field] = val
+
+        # 4) Merge on a fresh deep-copy of defaults
+        merged = copy.deepcopy(DEFAULT_PROMO_STRUCTURE)
+        merged.update(processed)
+
+        # 5) Final sanity-check: if *still* nothing, fallback
+        primaries = list(DEFAULT_PROMO_STRUCTURE.keys())
+        if all(not merged[f] for f in primaries):
+            print("[categorize_promo] nothing valid after clean → fallback")
+            return previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+
+        # Save and return
+        previous_promo_details[user_id] = merged
+        return merged
+
+    except Exception as e:
+        print(f"[categorize_promo] processing error: {e!r}")
+        return previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+
 
 FUNCTION_SCHEMA_NEW = {
     "name": "extract_promotion_details",

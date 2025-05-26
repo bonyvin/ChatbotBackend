@@ -77,8 +77,7 @@ You can provide all the details at once, separated by commas, or enter them one 
   - If an *Item ID is entered multiple times, I will **sum its quantity and cost*** instead of creating duplicates.  
 - *Prompt for missing information* if required.  
 - *Date Validation* 
-    # - Ensure that estimated delivery date is not in the past and is the same as or later than {current_date}.
-    - Validate that the estimated delivery date equals the {current_date} plus the {lead_time}. Ensure the user-entered date matches or is greater than this value.
+    - Ensure that estimated delivery date is not in the past and is the same as or later than {current_date}.
 - *Summarize all details before final submission.*  
 
 ---
@@ -210,22 +209,37 @@ Upon receiving a 'Yes' response, inquire whether the user would like the documen
 """
 today = datetime.datetime.today().strftime("%d/%m/%Y")
 template_PO=template_PO_without_date.replace("{current_date}", today)
+# DEFAULT_PO_STRUCTURE = {
+#     "supplier_id": None,
+#     "estimated_delivery_date": None,
+#     "total_quantity": 0,
+#     "total_cost": 0.0,
+#     "total_tax": 0.0,
+#     "items": [
+#         {
+#             "itemId": None,
+#             "itemQuantity": None,
+#             "itemCost": None
+#         }
+#     ],  # List of items with details
+#     "email":""
+# }
+ 
 DEFAULT_PO_STRUCTURE = {
-    "supplier_id": None,
-    "estimated_delivery_date": None,
-    "total_quantity": 0,
-    "total_cost": 0.0,
-    "total_tax": 0.0,
-    "items": [
+            "Supplier ID":                "",
+            "Estimated Delivery Date":    "",
+            "Total Quantity":             "",
+            "Total Cost":                 "",
+            "Total Tax":                  "",
+            "Items":                      [
         {
             "itemId": None,
             "itemQuantity": None,
             "itemCost": None
         }
-    ],  # List of items with details
-    "email":""
-}
- 
+    ],
+            "Email":                      "",
+        }
 previous_po_details = {}
 
 async def categorize_po_details(extracted_text: str, user_id: str):
@@ -255,8 +269,10 @@ Use the exact field names as provided above. If a value is missing, set "value" 
 **Purchase Order Text:**
 {extracted_text}
 
-Return the response as a valid JSON object like:
-"Field Name": {{ "value": ..., "is_example": true/false }}
+Return the response as a valid JSON object where each key is one of the fields and its value is an object in the form:
+    "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}
+  
+If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
 """
 
     try:
@@ -271,25 +287,75 @@ Return the response as a valid JSON object like:
         raw_response = response.choices[0].message.content.strip()
         if raw_response.startswith("```json"):
             raw_response = raw_response[7:-3].strip()
+        print("Raw combined response:", raw_response)
         extracted_data = json.loads(raw_response)
+        # Check if all values in the raw response are null or empty lists
+        all_null = all(
+            (v == {"value": None, "is_example": False}) or
+            (v == {"value": [], "is_example": False}) or
+            (isinstance(v, list) and all(
+                all(sub.get("value") is None for sub in item.values())
+                for item in v
+            ))
+            for v in extracted_data.values()
+        )
+
+        if all_null:
+            print("All values in response are null/empty. Returning previous data.")
+            return previous_po_details.get(user_id, {})
 
         # Clean out example values
         processed_data = {}
+        # for field, details in extracted_data.items():
+        #     is_example = details.get("is_example", False)
+        #     value = details.get("value")
+        #     if is_example:
+        #         processed_data[field] = [] if field == "Items" else None
+        #     else:
+        #         processed_data[field] = value if value is not None else ([] if field == "Items" else None)
+
+        # print("Processed Data PO: ",processed_data)
+        # previous_po_details[user_id] = processed_data
         for field, details in extracted_data.items():
+            # 1) If we got a list, we know this is our Items array
+            if isinstance(details, list):
+                items = []
+                for item_obj in details:
+                    cleaned = {}
+                    for subfield, subdetail in item_obj.items():
+                        # now subdetail _is_ a dict, so .get() works
+                        if not subdetail.get("is_example", False):
+                            cleaned[subfield] = subdetail.get("value")
+                    if cleaned:
+                        items.append(cleaned)
+                processed_data[field] = items
+                continue
+
+            # 2) Otherwise, details _should_ be a dict
+            if not isinstance(details, dict):
+                # unexpected, just default
+                processed_data[field] = [] if field == "Items" else None
+                continue
+
+            # 3) your existing logic
             is_example = details.get("is_example", False)
-            value = details.get("value")
+            value      = details.get("value")
             if is_example:
                 processed_data[field] = [] if field == "Items" else None
             else:
-                processed_data[field] = value if value is not None else ([] if field == "Items" else None)
-
-        previous_po_details[user_id] = processed_data
+                processed_data[field] = (
+                    value if value is not None
+                    else ([] if field == "Items" else None)
+                ) 
+        previous_po_details[user_id] = processed_data       
         return processed_data
+
 
     except Exception as e:
         print(f"Error fetching PO details: {e}")
         return previous_po_details.get(user_id, {})
-    
+
+
 async def categorize_po_details_(extracted_text: str, user_id: str):
     client = openai.AsyncOpenAI()
     

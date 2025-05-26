@@ -92,8 +92,8 @@ class ChatRequest(BaseModel):
     user_id: str
     message: str
 
-
-
+class ChatRequestUser(BaseModel):
+    user_id:str
 
 class UserSchema(BaseModel):
     id:int
