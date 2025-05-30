@@ -68,6 +68,12 @@ You can provide all the details at once, separated by commas, or enter them one 
 
 ### *My Capabilities*   
 - I will *Keep track of all entered details* and fill in any missing ones in the same structured format. Each detail will be recorded as: [Detail Name]: [Provided Value], ensuring consistency with the format outlined above.
+- **Important**:  
+    1. **Immediately Display Recorded Details**: Whenever the user provides a valid input, record and **immediately display** that information in the response. This should include:
+    - The field just filled by the user (e.g., "Supplier ID: SUP123").
+    - All previously recorded details.
+    2. **Show Missing Fields**: Always include a list of **missing fields** (details that the user has not yet provided). This allows the user to know what is still required.
+    - Missing fields should be shown clearly with labels like: "Supplier ID," "Estimated Delivery Date," "Items (Item ID,Quantity and Cost)," etc.
 - *Standardize formats*, such as:
   - Converting relative dates like "2 weeks from now" or "3 days from now" into "dd/mm/yyyy".
   - Converting different date formats like "MM/DD/YYYY", "YYYY/MM/DD", "DD.MM.YYYY", "DD-MM-YYYY", "Month Day, Year", "Day, Month DD, YYYY", "YYYY-MM-DD",etc to  "dd/mm/yyyy". 
@@ -206,6 +212,7 @@ Missing details (if any) will be listed below.
 Would you like to submit this information?  
 If you respond with 'Yes', I'll confirm with *"Purchase Order created successfully. Thank you for choosing us."*  
 Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
+If you respond with an email id, I'll confirm with "Email sent successfully to [received email id].".
 """
 today = datetime.datetime.today().strftime("%d/%m/%Y")
 template_PO=template_PO_without_date.replace("{current_date}", today)
@@ -226,21 +233,134 @@ template_PO=template_PO_without_date.replace("{current_date}", today)
 # }
  
 DEFAULT_PO_STRUCTURE = {
-            "Supplier ID":                "",
-            "Estimated Delivery Date":    "",
-            "Total Quantity":             "",
-            "Total Cost":                 "",
-            "Total Tax":                  "",
-            "Items":                      [
-        {
-            "itemId": None,
-            "itemQuantity": None,
-            "itemCost": None
-        }
-    ],
-            "Email":                      "",
+            "Supplier ID":"",
+            "Estimated Delivery Date":"",
+            "Total Quantity":"",
+            "Total Cost":"",
+            "Total Tax":"",
+            "Items": "",
+    #         "Items":                      [
+    #     {
+    #         "Item ID": None,
+    #         "Quantity": None,
+    #         "Cost Per Unit": None
+    #     }
+    # ],
+            "Email":"",
         }
 previous_po_details = {}
+
+#     client = openai.AsyncOpenAI()
+
+#     prompt = f"""
+# Extract the following purchase order details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
+#   - "value": the extracted field value (or null if missing).
+#   - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
+
+# The fields and their expected formats are:
+
+# - **Supplier ID** → (alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID")  
+# - **Estimated Delivery Date** → (formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery")  
+# - **Total Quantity** → (sum of all item quantities)  
+# - **Total Cost** → (sum of all item costs)  
+# - **Total Tax** → (10% of total cost)  
+# - **Items** → (Array of objects, each containing):  
+#     - **Item ID** → (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
+#     - **Quantity** → (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
+#     - **Cost Per Unit** → (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
+# - **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
+
+
+# Use the exact field names as provided above. If a value is missing, set "value" to null (or [] for arrays) and "is_example" to false.
+
+# **Purchase Order Text:**
+# {extracted_text}
+
+# Return the response as a valid JSON object where each key is one of the fields and its value is an object in the form:
+#     "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}
+  
+# If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
+# """
+
+#     try:
+#         response = await client.chat.completions.create(
+#             model="gpt-4-turbo",
+#             messages=[
+#                 {"role": "system", "content": "Extract PO details with per-field example flags as described."},
+#                 {"role": "user", "content": prompt}
+#             ],
+#             response_format={"type": "json_object"}
+#         )
+#         raw_response = response.choices[0].message.content.strip()
+#         if raw_response.startswith("```json"):
+#             raw_response = raw_response[7:-3].strip()
+#         print("Raw combined response:", raw_response)
+#         extracted_data = json.loads(raw_response)
+#         # Check if all values in the raw response are null or empty lists
+#         all_null = all(
+#             (v == {"value": None, "is_example": False}) or
+#             (v == {"value": [], "is_example": False}) or
+#             (isinstance(v, list) and all(
+#                 all(sub.get("value") is None for sub in item.values())
+#                 for item in v
+#             ))
+#             for v in extracted_data.values()
+#         )
+
+#         if all_null:
+#             print("All values in response are null/empty. Returning previous data.")
+#             return previous_po_details.get(user_id, {})
+
+#         # Clean out example values
+#         processed_data = {}
+#         # for field, details in extracted_data.items():
+#         #     is_example = details.get("is_example", False)
+#         #     value = details.get("value")
+#         #     if is_example:
+#         #         processed_data[field] = [] if field == "Items" else None
+#         #     else:
+#         #         processed_data[field] = value if value is not None else ([] if field == "Items" else None)
+
+#         # print("Processed Data PO: ",processed_data)
+#         # previous_po_details[user_id] = processed_data
+#         for field, details in extracted_data.items():
+#             # 1) If we got a list, we know this is our Items array
+#             if isinstance(details, list):
+#                 items = []
+#                 for item_obj in details:
+#                     cleaned = {}
+#                     for subfield, subdetail in item_obj.items():
+#                         # now subdetail _is_ a dict, so .get() works
+#                         if not subdetail.get("is_example", False):
+#                             cleaned[subfield] = subdetail.get("value")
+#                     if cleaned:
+#                         items.append(cleaned)
+#                 processed_data[field] = items
+#                 continue
+
+#             # 2) Otherwise, details _should_ be a dict
+#             if not isinstance(details, dict):
+#                 # unexpected, just default
+#                 processed_data[field] = [] if field == "Items" else None
+#                 continue
+
+#             # 3) your existing logic
+#             is_example = details.get("is_example", False)
+#             value      = details.get("value")
+#             if is_example:
+#                 processed_data[field] = [] if field == "Items" else None
+#             else:
+#                 processed_data[field] = (
+#                     value if value is not None
+#                     else ([] if field == "Items" else None)
+#                 ) 
+#         previous_po_details[user_id] = processed_data       
+#         return processed_data
+
+
+#     except Exception as e:
+#         print(f"Error fetching PO details: {e}")
+#         return previous_po_details.get(user_id, {})
 
 async def categorize_po_details(extracted_text: str, user_id: str):
     client = openai.AsyncOpenAI()
@@ -287,73 +407,73 @@ If a field's value is missing, return null (or an empty array for fields expecte
         raw_response = response.choices[0].message.content.strip()
         if raw_response.startswith("```json"):
             raw_response = raw_response[7:-3].strip()
+
         print("Raw combined response:", raw_response)
         extracted_data = json.loads(raw_response)
-        # Check if all values in the raw response are null or empty lists
-        all_null = all(
-            (v == {"value": None, "is_example": False}) or
-            (v == {"value": [], "is_example": False}) or
-            (isinstance(v, list) and all(
-                all(sub.get("value") is None for sub in item.values())
-                for item in v
-            ))
-            for v in extracted_data.values()
-        )
 
-        if all_null:
-            print("All values in response are null/empty. Returning previous data.")
-            return previous_po_details.get(user_id, {})
+        old_data = previous_po_details.get(user_id, DEFAULT_PO_STRUCTURE.copy())
+        merged_data = {}
 
-        # Clean out example values
-        processed_data = {}
-        # for field, details in extracted_data.items():
-        #     is_example = details.get("is_example", False)
-        #     value = details.get("value")
-        #     if is_example:
-        #         processed_data[field] = [] if field == "Items" else None
-        #     else:
-        #         processed_data[field] = value if value is not None else ([] if field == "Items" else None)
+        for field in DEFAULT_PO_STRUCTURE.keys():
+            details = extracted_data.get(field)
 
-        # print("Processed Data PO: ",processed_data)
-        # previous_po_details[user_id] = processed_data
-        for field, details in extracted_data.items():
-            # 1) If we got a list, we know this is our Items array
-            if isinstance(details, list):
-                items = []
-                for item_obj in details:
-                    cleaned = {}
-                    for subfield, subdetail in item_obj.items():
-                        # now subdetail _is_ a dict, so .get() works
-                        if not subdetail.get("is_example", False):
-                            cleaned[subfield] = subdetail.get("value")
-                    if cleaned:
-                        items.append(cleaned)
-                processed_data[field] = items
+            # If field is completely missing from response
+            if details is None:
+                merged_data[field] = old_data.get(field, DEFAULT_PO_STRUCTURE[field])
                 continue
 
-            # 2) Otherwise, details _should_ be a dict
-            if not isinstance(details, dict):
-                # unexpected, just default
-                processed_data[field] = [] if field == "Items" else None
+            # if field == "Items":
+            #     # Expecting: { "value": [ {...}, {...} ], "is_example": false }
+            #     items = details.get("value") or []
+            #     is_example = details.get("is_example", False)
+            #     merged_data[field] = items if (items and not is_example) else old_data.get(field, [])
+            #     continue
+            if field == "Items":
+                # TWO POSSIBLE SHAPES:
+                #  1) Wrapped:   { "value": [ {...}, {...} ], "is_example": false }
+                #  2) Directly: [ {...}, {...} ]
+                if isinstance(details, list):
+                    raw_items   = details
+                    is_example  = False
+                else:
+                    raw_items   = details.get("value") or []
+                    is_example  = details.get("is_example", False)
+
+                # Filter out any “example” sub-objects, if your schema ever nests them
+                cleaned = []
+                for item in raw_items:
+                    # if the LLM wrapped each sub-field like {"value": X, "is_example": false}
+                    if isinstance(item, dict) and all(isinstance(v, dict) for v in item.values()):
+                        obj = {}
+                        for k, sub in item.items():
+                            if not sub.get("is_example", False):
+                                obj[k] = sub.get("value")
+                        if obj:
+                            cleaned.append(obj)
+                    else:
+                        # assume it’s already a flat { "Item ID": "...", "Quantity": ..., ... }
+                        cleaned.append(item)
+
+                # if we got real items and they weren’t examples, use them
+                merged_data[field] = cleaned if (cleaned and not is_example) else old_data.get(field, [])
                 continue
 
-            # 3) your existing logic
+            # Handle standard fields
+            value = details.get("value")
             is_example = details.get("is_example", False)
-            value      = details.get("value")
-            if is_example:
-                processed_data[field] = [] if field == "Items" else None
+            if value is not None and not is_example:
+                merged_data[field] = value
             else:
-                processed_data[field] = (
-                    value if value is not None
-                    else ([] if field == "Items" else None)
-                ) 
-        previous_po_details[user_id] = processed_data       
-        return processed_data
+                merged_data[field] = old_data.get(field, DEFAULT_PO_STRUCTURE[field])
 
+        previous_po_details[user_id] = merged_data
+        return merged_data
 
     except Exception as e:
         print(f"Error fetching PO details: {e}")
-        return previous_po_details.get(user_id, {})
+        return previous_po_details.get(user_id, DEFAULT_PO_STRUCTURE.copy())
+
+# async def categorize_po_details(extracted_text: str, user_id: str):
 
 
 async def categorize_po_details_(extracted_text: str, user_id: str):

@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, TypedDict, Annotated, Sequence, AsyncIt
 import operator
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse # Import StreamingResponse
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 from dotenv import load_dotenv
 from sqlalchemy import text
 from requests import Session # Assuming Session is used within get_db
@@ -28,7 +28,7 @@ from langchain_core.messages import (
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
-from llm_templates import template_Promotion_without_date
+from llm_templates import template_PO_without_date,po_database_schema,po_extraction_prompt
 # from promoUtils import template_Promotion_without_date
 
 # Assuming database.py and llm_templates.py are in the same directory or accessible
@@ -109,26 +109,37 @@ if not OPENAI_API_KEY:
 print(f"LangSmith tracing enabled: {os.getenv('LANGCHAIN_TRACING_V2') == 'true'}")
 print(f"LangSmith project: {os.getenv('LANGCHAIN_PROJECT')}")
 
-# --- Tool Definition / Pydantic Models ---
-class ExtractedPromotionDetails(BaseModel):
-    # Use validation_alias and AliasChoices for more flexible field naming in LLM output
-    promotion_type: str | None = Field(None, validation_alias=AliasChoices('Promotion Type', 'promotion_type'))
-    hierarchy_type: str | None = Field(None, validation_alias=AliasChoices('Hierarchy Type', 'hierarchy_type'))
-    hierarchy_value: str | None = Field(None, validation_alias=AliasChoices('Hierarchy Value', 'hierarchy_value'))
-    brand: str | None = Field(None, validation_alias=AliasChoices('Brand', 'brand'))
-    items: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Items', 'items'))
-    excluded_items: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Excluded Items', 'excluded_items'))
-    discount_type: str | None = Field(None, validation_alias=AliasChoices('Discount Type', 'discount_type'))
-    discount_value: str | None = Field(None, validation_alias=AliasChoices('Discount Value', 'discount_value')) # Keep as str to handle % vs fixed ambiguity
-    start_date: str | None = Field(None, validation_alias=AliasChoices('Start Date', 'start_date'))
-    end_date: str | None = Field(None, validation_alias=AliasChoices('End Date', 'end_date'))
-    stores: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Stores', 'stores'))
-    excluded_stores: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Excluded Stores', 'excluded_stores'))
+# Define the Pydantic model for individual items within the order
+class OrderItem(BaseModel):
+    """
+    Represents a single item within an order, with flexible field naming.
+    """
+    item_id: Optional[str] = Field(..., validation_alias=AliasChoices('Item ID', 'Product Code', 'SKU', 'Item No.'))
+    quantity: Optional[int] = Field(..., validation_alias=AliasChoices('Quantity', 'Qty', 'Quantity Ordered', 'Units'))
+    cost_per_unit: Optional[float] = Field(..., validation_alias=AliasChoices('Cost Per Unit', 'Unit Price', 'Rate', 'Price per Item'))
 
     class Config:
-        populate_by_name = True # Allows using field names as well as aliases
-        extra = 'ignore' # Ignore extra fields the LLM might hallucinate
+        populate_by_name = True
+        extra = 'ignore'
 
+# Define the main Pydantic model for extracted order details
+class ExtractedPurchaseOrderDetails(BaseModel):
+    """
+    Pydantic model to represent extracted order details from various sources,
+    allowing for flexible field naming using AliasChoices.
+    """
+    supplier_id: Optional[str] = Field(..., validation_alias=AliasChoices('Supplier ID', 'Supplier', 'Supplier Code', 'Vendor ID'))
+    estimated_delivery_date: Optional[str] = Field(..., validation_alias=AliasChoices('Estimated Delivery Date', 'Delivery Date', 'Expected Date', 'Est. Delivery'))
+    total_quantity: Optional[int] = Field(..., validation_alias=AliasChoices('Total Quantity', 'Total Qty'))
+    total_cost: Optional[float] = Field(..., validation_alias=AliasChoices('Total Cost', 'Grand Total', 'Amount'))
+    total_tax: Optional[float] = Field(..., validation_alias=AliasChoices('Total Tax', 'Tax Amount', 'VAT'))
+    items: Optional[List[OrderItem]] = Field(default_factory=list, validation_alias=AliasChoices('Items', 'Order Items', 'Products'))
+    email: Optional[EmailStr] = Field(..., validation_alias=AliasChoices('Email', 'Email Address', 'Contact Email'))
+
+    class Config:
+        populate_by_name = True # Allows using field names (e.g., supplier_id) as well as aliases
+        extra = 'ignore' # Ignore any extra fields the LLM might hallucinate that are not defined
+        
 # --- LangChain/LangGraph Setup ---
 
 # Initialize LLMs
@@ -144,51 +155,13 @@ sql_generator_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temp
 # LLM for detail extraction (non-streaming)
 extractor_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0)
 extractor_llm_structured = extractor_llm.with_structured_output(
-    ExtractedPromotionDetails,
+    ExtractedPurchaseOrderDetails,
     method="function_calling", # Or "json_mode"
     include_raw=False
 )
 
 # --- Database Schema and Helper Functions ---
-TABLE_SCHEMA = """
-Database Schema:
-
-1. `itemmaster` (Alias: im) (Base Table for Item Details):
-   - `itemId` (VARCHAR/INT): Unique identifier for each item. (Primary Key)
-   - `itemDescription` (VARCHAR): Primary description of the item.
-   - `itemSecondaryDescription` (VARCHAR): Additional details about the item.
-   - `itemDepartment` (VARCHAR): Broader category (e.g., T-Shirt, Trousers, Jackets). Use LIKE 'value%' for filtering.
-   - `itemClass` (VARCHAR): Classification within a department (e.g., Formals, Casuals, Leather). Use LIKE 'value%' for filtering.
-   - `itemSubClass` (VARCHAR): Granular classification (e.g., Full Sleeve, Half Sleeve, Zipper, Regular Fit). Use LIKE 'value%' for filtering.
-   - `brand` (VARCHAR): Brand associated with the item (e.g., Zara, Adidas, H&M). Use = 'value' for filtering.
-   - `diffType1` (INT): Foreign key linking to `itemdiffs.id` (e.g., for color).
-   - `diffType2` (INT): Foreign key linking to `itemdiffs.id` (e.g., for size).
-   - `diffType3` (INT): Foreign key linking to `itemdiffs.id` (e.g., for material).
-
-2. `itemsupplier` (Alias: isup) (For Cost & Supplier Data):
-   - `id` (INT): Unique identifier for this relationship. (Primary Key)
-   - `supplierCost` (DECIMAL/FLOAT): Cost of the item from the supplier.
-   - `supplierId` (VARCHAR/INT): Identifier for the supplier.
-   - `itemId` (VARCHAR/INT): Foreign key linking to `itemmaster.itemId`.
-
-3. `itemdiffs` (Alias: idf) (For Attribute Filtering - Differentiation Types):
-   - `id` (INT): Unique identifier for each differentiation attribute. (Primary Key)
-   - `diffType` (VARCHAR): The attribute type (e.g., 'color', 'size', 'material'). Often used with diffId.
-   - `diffId` (VARCHAR): The actual differentiation value (e.g., 'Red', 'XL', 'Cotton'). Use = 'value' for filtering.
-
-4. `storedetails` (Alias: sd) (For Store Information):
-   - `storeId` (INT): Unique identifier for each store. (Primary Key)
-   - `storeName` (VARCHAR): Name of the store.
-   - `address` (VARCHAR): Street address.
-   - `city` (VARCHAR): City.
-   - `state` (VARCHAR): State.
-   - `zipCode` (VARCHAR): ZIP code.
-   - `phone` (VARCHAR): Contact phone number.
-
-Relationships:
-- `itemmaster.itemId` links to `itemsupplier.itemId`. JOIN using `ON im.itemId = isup.itemId`.
-- `itemmaster.diffType1`, `itemmaster.diffType2`, `itemmaster.diffType3` link to `itemdiffs.id`.
-"""
+TABLE_SCHEMA = po_database_schema
 
 # Memoized table names to avoid repeated DB calls
 _table_names_cache = None
@@ -221,7 +194,7 @@ class GraphState(TypedDict):
     generated_sql: Optional[str] # SQL generated by the LLM
     sql_results: Optional[List[Dict] | str] # Results from DB execution or error string
     llm_response_content: Optional[str] # Content from the main LLM response node (to be streamed)
-    extracted_details: Optional[ExtractedPromotionDetails] # Details extracted from LLM response
+    extracted_details: Optional[ExtractedPurchaseOrderDetails] # Details extracted from LLM response
 
 # --- Graph Nodes ---
 
@@ -235,6 +208,7 @@ async def preprocess_input(state: GraphState) -> Dict:
     print(f"User Query: {user_query}")
     return {"user_query": user_query}
 
+#sql ignored for now
 async def generate_sql(state: GraphState) -> Dict:
     """
     Node to attempt generating SQL from the user query.
@@ -425,123 +399,6 @@ async def execute_sql(state: GraphState) -> Dict:
 
     return {"sql_results": sql_results}
 
-# async def generate_response_from_sql(state: GraphState) -> Dict:
-#     """
-#     Node to generate a natural language response based on SQL execution results.
-#     This node's LLM call will be streamed to the client.
-#     """
-#     print("--- Node: generate_response_from_sql ---")
-#     user_query = state.get("user_query", "the user's request")
-#     sql_results = state.get("sql_results")
-#     generated_sql = state.get("generated_sql")
-#     messages = state.get("messages", []) # Get history for context
-
-#     # Prepare context for the LLM
-#     context = f"The user asked: '{user_query}'\n"
-#     context += f"I generated the following SQL query to find relevant data: \n```sql\n{generated_sql}\n```\n"
-
-#     if isinstance(sql_results, str): # Error occurred during execution
-#         context += f"However, there was an error executing the query: {sql_results}\n"
-#         context += "Please inform the user about the error and ask if they want to rephrase their request."
-#         llm_instruction = "Explain the database query error to the user based on the context."
-#     elif isinstance(sql_results, list):
-#         if not sql_results:
-#             context += "The query executed successfully but returned no results.\n"
-#             context += "Please inform the user that no items matched their criteria."
-#             llm_instruction = "Inform the user that the database query found no matching items based on the context."
-#         else:
-#             # Limit the number of results shown to the LLM to avoid large context
-#             max_results_to_show = 10
-#             results_summary = json.dumps(sql_results[:max_results_to_show], indent=2)
-#             if len(sql_results) > max_results_to_show:
-#                 results_summary += f"\n... (and {len(sql_results) - max_results_to_show} more rows)"
-
-#             context += f"The query returned the following results (showing up to {max_results_to_show}):\n```json\n{results_summary}\n```\n"
-#             context += f"Please summarize these findings for the user in a clear and concise way. Mention that you looked this up in the database. Total items found: {len(sql_results)}."
-#             llm_instruction = "Summarize the database query results for the user based on the context."
-#     else:
-#          context += "There was an issue processing the SQL results (unexpected type).\n"
-#          context += "Please apologize to the user and mention a technical difficulty."
-#          llm_instruction = "Apologize for a technical difficulty processing database results based on the context."
-
-#     today = datetime.datetime.now().strftime("%d/%m/%Y")
-#     system_prompt_content = template_Promotion_without_date.replace("{current_date}", today)
-#     # Define the prompt for summarizing SQL results
-#     sql_summary_prompt = ChatPromptTemplate.from_messages([
-#         # ("system", "You are a helpful assistant. You have just executed a database query based on the user's request. Your task is to present the results (or lack thereof, or errors) to the user clearly and conversationally, using the provided context."),
-#         ("system", system_prompt_content),
-#         MessagesPlaceholder(variable_name="history"), # Include history
-#         ("human", "{llm_instruction}\n\nContext:\n{context}") # Provide context and specific instruction
-#     ])
-
-#     # Chain for generating the summary (using the main chat_model for streaming)
-#     summary_chain = sql_summary_prompt | chat_model
-
-#     # Get history excluding the last human message which triggered this flow
-#     history = list(messages[:-1]) if messages else []
-
-#     # Invoke the chain - LangGraph's runner will handle streaming this node's output
-#     # We need the *final* aggregated content for the state update.
-#     response = await summary_chain.ainvoke({
-#         "history": history,
-#         "llm_instruction": llm_instruction,
-#         "context": context
-#         })
-#     print("Response   Contenttt:  ",response.content)
-#     # The actual streaming happens via astream_events, but we store the final content
-#     # in the state for potential later use (like extraction).
-#     # Also add the AI response to the message history
-#     return {"llm_response_content": response.content, "messages": [response]}
-
-
-# async def generate_direct_response(state: GraphState) -> Dict:
-#     """
-#     Node to generate a response directly using the LLM when SQL is not applicable.
-#     This node's LLM call will be streamed to the client.
-#     """
-#     print("--- Node: generate_direct_response ---")
-#     messages = state.get("messages", [])
-
-#     # Use the original system prompt and conversation history
-#     today = datetime.datetime.now().strftime("%d/%m/%Y")
-#     system_prompt_content = template_Promotion_without_date.replace("{current_date}", today)
-
-#     prompt_template = ChatPromptTemplate.from_messages([
-#         ("system", system_prompt_content),
-#         MessagesPlaceholder(variable_name="history"),
-#         ("human", "{user_input}") # Get the last human message
-#     ])
-
-#     # Get the last human message for the current turn's input
-#     last_human_message = ""
-#     history = []
-#     if messages:
-#         # Separate history from the last message which acts as input
-#         history = list(messages[:-1])
-#         if isinstance(messages[-1], HumanMessage):
-#             last_human_message = messages[-1].content
-#         else:
-#             # Fallback if the last message isn't Human, maybe log a warning
-#             print("Warning: Last message in state was not HumanMessage.")
-#             # Attempt to find the last human message in history
-#             for msg in reversed(messages):
-#                 if isinstance(msg, HumanMessage):
-#                     last_human_message = msg.content
-#                     break
-
-
-#     # Chain for direct response (using the main chat_model for streaming)
-#     direct_response_chain = prompt_template | chat_model
-
-#     # Invoke the chain - LangGraph's runner will handle streaming this node's output
-#     # We need the *final* aggregated content for the state update.
-#     response = await direct_response_chain.ainvoke({
-#         "history": history,
-#         "user_input": last_human_message
-#     })
-
-#     # Store the final content in the state and add AI response to messages
-#     return {"llm_response_content": response.content, "messages": [response]}
 
 async def generate_response_from_sql(state: 'GraphState') -> Dict:
     """
@@ -603,7 +460,7 @@ async def generate_response_from_sql(state: 'GraphState') -> Dict:
 
     # Define the prompt for summarizing SQL results
     today = datetime.datetime.now().strftime("%d/%m/%Y")
-    system_prompt_content = template_Promotion_without_date.replace("{current_date}", today)
+    system_prompt_content = template_PO_without_date.replace("{current_date}", today)
     sql_summary_prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt_content),
         MessagesPlaceholder(variable_name="history"), # Include history
@@ -659,7 +516,7 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
 
     # Use the original system prompt and conversation history
     today = datetime.datetime.now().strftime("%d/%m/%Y")
-    system_prompt_content = template_Promotion_without_date.replace("{current_date}", today)
+    system_prompt_content = template_PO_without_date.replace("{current_date}", today)
 
     prompt_template = ChatPromptTemplate.from_messages([
         ("system", system_prompt_content),
@@ -728,7 +585,7 @@ async def extract_details(state: GraphState) -> Dict:
     """
     print("--- Node: extract_details ---")
     response_text = state.get("llm_response_content")
-    extracted_data: Optional[ExtractedPromotionDetails] = None # Default
+    extracted_data: Optional[ExtractedPurchaseOrderDetails] = None # Default
 
     if not response_text:
         print("--- No LLM response text found for extraction. Skipping. ---")
@@ -737,16 +594,9 @@ async def extract_details(state: GraphState) -> Dict:
     # Simple instruction for the extractor LLM
     today = datetime.datetime.now().strftime("%d/%m/%Y")
     extraction_prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""
-You are an expert extraction system. Analyze the provided text, which is a response from a promotion creation assistant summarizing the current state of a promotion or answering a query. Extract the promotion details mentioned into the structured format defined by the 'ExtractedPromotionDetails' function/tool.
-
-- Today's date is {today}. Use this ONLY if needed to interpret relative dates mentioned IN THE TEXT (like "starts tomorrow"), standardizing to dd/mm/yyyy.
-- Standardize date formats found in the text to dd/mm/yyyy.
-- Extract lists for items, excluded items, stores, excluded stores.
-- If a field is explicitly mentioned as 'Missing' or not present in the text, leave its value as null or empty list.
-- Focus *only* on the details present in the text. Do not infer or add information not explicitly stated.
-"""),
-        ("human", "Extract promotion details from this text:\n\n```text\n{text_to_extract}\n```")
+        ("system", po_extraction_prompt),
+        #changed promotion to po
+        ("human", "Extract purchase order details from this text:\n\n```text\n{text_to_extract}\n```")
     ])
 
     # Create the extraction chain
@@ -760,7 +610,7 @@ You are an expert extraction system. Analyze the provided text, which is a respo
         print(f"--- Extracting details from: '{truncated_text[:200]}...' ---")
         llm_extracted_data = await extraction_chain.ainvoke({"text_to_extract": truncated_text})
 
-        if llm_extracted_data and isinstance(llm_extracted_data, ExtractedPromotionDetails):
+        if llm_extracted_data and isinstance(llm_extracted_data, ExtractedPurchaseOrderDetails):
             print("--- Extraction Successful ---")
             extracted_data = llm_extracted_data
             print(f"Extracted Data: {extracted_data.model_dump_json(indent=2)}") # Log extracted data
@@ -852,84 +702,6 @@ class ChatRequest(BaseModel):
     message: str
     thread_id: str | None = None
 
-# --- Streaming Generator (Using astream_events) ---
-# async def stream_response_generator(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
-#     """
-#     Asynchronously streams LLM response chunks identified within the graph event stream.
-#     It specifically looks for chunks from the nodes intended for user-facing output.
-#     """
-#     print("--- STREAM GENERATOR (for client) STARTED ---")
-#     full_response_for_log = "" # Only for logging the complete streamed message
-#     streamed_something = False # Flag to track if any content was yielded
-
-#     try:
-#         # Nodes whose LLM output should be streamed to the client
-#         streaming_nodes = {"generate_direct_response", "generate_response_from_sql"}
-
-#         async for event in graph_stream:
-#             kind = event["event"]
-#             # Check if the event is a streaming chunk from one of our designated nodes
-#             if kind == "on_chat_model_stream":
-#                 event_name = event.get("name") # The node name that generated the stream
-#                 if event_name in streaming_nodes:
-#                     chunk = event["data"].get("chunk")
-#                     # Ensure it's an AIMessageChunk and has content
-#                     if isinstance(chunk, AIMessageChunk) and chunk.content:
-#                         content_to_yield = chunk.content
-#                         # print(f"Streaming chunk from {event_name}: {content_to_yield}") # Debug print
-#                         full_response_for_log += content_to_yield
-#                         streamed_something = True
-#                         yield content_to_yield # Yield the content string
-
-#             # Optional: Log other events for debugging
-#             # elif kind == "on_chain_start" or kind == "on_chain_end":
-#             #     print(f"--- Event: {kind} | Name: {event['name']} ---")
-#             # elif kind == "on_llm_start" or kind == "on_llm_end":
-#             #      print(f"--- Event: {kind} | Name: {event['name']} ---")
-#             # elif kind == "on_tool_start" or kind == "on_tool_end":
-#             #      print(f"--- Event: {kind} | Name: {event['name']} ---")
-
-
-#     except Exception as e:
-#         print(f"!!! ERROR in stream_response_generator: {e} !!!")
-#         traceback.print_exc()
-#         # Yield an error message to the client stream if streaming hasn't started
-#         if not streamed_something:
-#              yield f"\n\nStream error: {e}"
-#         else:
-#             # If streaming already started, the error might be logged but not sent to client
-#             # to avoid breaking the existing stream format.
-#              print("Error occurred after streaming started, not yielding error message to client.")
-#     finally:
-#         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
-#         # Log the full response assembled from chunks (optional)
-#         # print(f"--- Full response streamed to client:\n{full_response_for_log}\n---")
-
-# async def stream_response_generator(
-#     graph_stream: AsyncIterator[Dict]
-# ) -> AsyncIterator[str]:
-#     """
-#     Asynchronously streams *all* LLM response chunks from the graph
-#     to the client as soon as they arrive.
-#     """
-#     print("--- STREAM GENERATOR (for client) STARTED ---")
-#     full_response_for_log = ""
-#     try:
-#         async for event in graph_stream:
-#             if event["event"] == "on_chat_model_stream":
-#                 chunk = event["data"].get("chunk")
-#                 if isinstance(chunk, AIMessageChunk) and chunk.content:
-#                     content = chunk.content
-#                     full_response_for_log += content
-#                     yield content
-#     except Exception as e:
-#         print(f"!!! ERROR in stream_response_generator: {e} !!!")
-#         traceback.print_exc()
-#         # If nothing has been sent yet, at least send an error
-#         yield f"\n\nStream error: {e}"
-#     finally:
-#         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
-#         # For debugging, you could log full_response_for_log here
 
 async def stream_response_generator(
     graph_stream: AsyncIterator[Dict]

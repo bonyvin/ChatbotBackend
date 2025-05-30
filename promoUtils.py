@@ -352,6 +352,8 @@ Items: ITEM003,ITEM004
 Would you like to submit this information?  
 If you respond with 'Yes', I'll confirm with *"Promotion created successfully. Thank you for choosing us."*
 Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
+If you respond with an email id, I'll confirm with "Email sent successfully to [received email id].".
+
 """
 # template_Promotion_without_date = """  
 # Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your promotion operations and provide seamless support. Today is {current_date}.  
@@ -980,71 +982,68 @@ Return the response as a valid JSON object where each key is one of the fields a
 If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
     """
     
+
+    old_data = previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+
     try:
         response = await client.chat.completions.create(
             model="gpt-4-turbo",
             messages=[
-                {"role": "system", "content": "Extract promotion details with per-field example flags as described."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "Extract promotion details…"},
+                {"role": "user",   "content": prompt}
             ],
             response_format={"type": "json_object"}
         )
         raw = response.choices[0].message.content.strip()
-        # strip any ```json ... ``` wrappers
+        print("Raw: ",raw)
         if raw.startswith("```"):
             raw = raw.split("```", 2)[-1].rsplit("```", 1)[0].strip()
-
-        extracted_data = json.loads(raw)
-
+        extracted = json.loads(raw)
     except Exception as e:
-        print(f"[categorize_promo] extraction error: {e!r}")
-        # fallback: full default or last saved
-        return previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+        print(f"[promos] extraction error: {e!r}")
+        return old_data
 
-    # 2) If *all* fields are null/empty in the LLM output → immediately fallback
+    # 3) If _all_ fields are empty or examples, bail
     all_empty = all(
-        (details.get("is_example", False) or details.get("value") in (None, [], "")) 
-        for details in extracted_data.values()
+        (d.get("is_example", False) or d.get("value") in (None, [], ""))
+        for d in extracted.values()
     )
     if all_empty:
-        print("[categorize_promo] all fields empty → returning previous data.")
-        return previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+        return old_data
 
-    # 3) Clean & map into our structure
-    try:
-        processed = {}
-        for field, details in extracted_data.items():
-            is_ex = details.get("is_example", False)
-            val   = details.get("value")
+    # 4) Merge onto a fresh copy of old_data
+    merged = copy.deepcopy(old_data)
+    for field, default in DEFAULT_PROMO_STRUCTURE.items():
+        details = extracted.get(field)
+        if details is None:
+            # no mention at all → keep old
+            continue
 
-            default = DEFAULT_PROMO_STRUCTURE.get(field)
-            if is_ex:
-                # example entries get reset
-                processed[field] = [] if isinstance(default, list) else None
+        # unwrap raw list for array fields
+        if isinstance(default, list):
+            if isinstance(details, list):
+                # LLM returned the array directly
+                val_list    = details
+                is_example  = False
             else:
-                # preserve explicit nulls vs empty lists
-                if val is None:
-                    processed[field] = [] if isinstance(default, list) else None
-                else:
-                    processed[field] = val
+                # wrapped shape
+                val_list    = details.get("value")   or []
+                is_example  = details.get("is_example", False)
 
-        # 4) Merge on a fresh deep-copy of defaults
-        merged = copy.deepcopy(DEFAULT_PROMO_STRUCTURE)
-        merged.update(processed)
+            # only overwrite if we got at least one real element
+            if not is_example and isinstance(val_list, list) and val_list:
+                merged[field] = val_list
 
-        # 5) Final sanity-check: if *still* nothing, fallback
-        primaries = list(DEFAULT_PROMO_STRUCTURE.keys())
-        if all(not merged[f] for f in primaries):
-            print("[categorize_promo] nothing valid after clean → fallback")
-            return previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+        else:
+            # scalar field: wrapped shape only
+            is_example = details.get("is_example", False)
+            val        = details.get("value")
+            if not is_example and val not in (None, ""):
+                merged[field] = val
 
-        # Save and return
-        previous_promo_details[user_id] = merged
-        return merged
-
-    except Exception as e:
-        print(f"[categorize_promo] processing error: {e!r}")
-        return previous_promo_details.get(user_id, copy.deepcopy(DEFAULT_PROMO_STRUCTURE))
+    # 5) Save & return
+    previous_promo_details[user_id] = merged
+    return merged
 
 
 FUNCTION_SCHEMA_NEW = {

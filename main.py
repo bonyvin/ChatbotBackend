@@ -808,8 +808,11 @@ def find_attributes(question: str) -> Tuple[Optional[List[str]], Optional[List[s
     
     # Get attribute metadata in a single query.
     attr_data = db_query(
-        "SELECT diffType, diffId, id FROM itemdiffs GROUP BY diffType, diffId"
+        "SELECT diffType, diffId, MIN(id) AS id FROM itemdiffs GROUP BY diffType, diffId"
     )
+    # attr_data = db_query(
+    #     "SELECT diffType, diffId, id FROM itemdiffs GROUP BY diffType, diffId"
+    # )
     
     if not attr_data:
         print("No attribute data found in database")
@@ -843,15 +846,12 @@ def find_attributes(question: str) -> Tuple[Optional[List[str]], Optional[List[s
     return (detected_attrs, detected_values, detected_ids)
 
 llm_gpt4 = ChatOpenAI(model_name="gpt-4-turbo", temperature=0.7)
-response_cache = {}  # In-memory cache keyed by conversation hash
-user_promo_details={}
-conversation_memory = {}
-promo_details_memory = {}
-conversation_states = defaultdict(list)
-previous_promo_details = defaultdict(dict)
-
-#working old code    
+# conversation_states = defaultdict(list)
+previous_promo_details = defaultdict(dict)  
 promo_states = defaultdict(dict)
+user_promo_details={}
+promo_email_cache = defaultdict(set)
+
 DEFAULT_PROMO_STRUCTURE = {
     "type": "",
     "hierarchy": {"level": "", "value": ""},
@@ -863,8 +863,6 @@ DEFAULT_PROMO_STRUCTURE = {
     "excluded_locations": [],
     "status": "draft"
 }
-user_promo_details={}
-
 
 def classify_query(user_message: str, conversation_context: str) -> str:
     """
@@ -982,7 +980,7 @@ def db_query_insights(query: str, params: Dict[str, Any] = None) -> List[Dict[st
 @app.get("/supplier-risk-insights")
 async def supplier_risk(supplierId:str):
     insights=await generate_supplier_insights(supplierId,db_query_insights)
-    logging.info("promo_entities success: %s", await generate_supplier_insights(supplierId,db_query_insights))
+    # logging.info("promo_entities success: %s", await generate_supplier_insights(supplierId,db_query_insights))
     # def fig_to_bytes(fig):
     #     buf = io.BytesIO()
     #     fig.write_image(buf, format="png")
@@ -1010,7 +1008,6 @@ async def supplier_risk(supplierId:str):
 
     return {"insights":insights}
 
-promo_email_cache = defaultdict(set)
 @app.post("/promo-chat")
 async def handle_promotion_chat(request: dict):
     # Assuming request has keys "user_id" and "message"
@@ -1162,8 +1159,8 @@ async def handle_promotion_chat(request: dict):
         # user_promo_details[user_id] = await categorize_promo_details(bot_reply, user_id)
         promo_json = user_promo_details[user_id]
         promo_email=promo_json["Email"]
-        if(promo_email):
-            promo_email_cache[user_id].add(promo_email)
+        # if(promo_email):
+        #     promo_email_cache[user_id].add(promo_email)
 
         classification_result = classify_query(user_message, conversation)
 
@@ -1175,7 +1172,15 @@ async def handle_promotion_chat(request: dict):
         elif "Promotion created successfully" in bot_reply:
             submissionStatus = "submitted"
         elif "I want to change something" in bot_reply:
-            submissionStatus = "cancelled"
+            submissionStatus = "cancelled"       
+        
+        if promo_email:
+        # only if we’ve never seen it before do we override
+            if promo_email not in promo_email_cache[user_id]:
+                submissionStatus = "pending"
+            promo_email_cache[user_id].add(promo_email)
+        
+
 
         return {
             "user_id": user_id,
@@ -1460,9 +1465,6 @@ def query_database_function(question: str) -> str:
         print("Query error: ",{str(e)})
         return f"Error executing query: {str(e)}"
 
-user_supplier_cache = {}
-
-
 # @app.post("/chat")
 # async def chat_with_po_assistant(request: ChatRequest):
 #     user_id = request.user_id
@@ -1593,6 +1595,7 @@ user_supplier_cache = {}
 #         raise HTTPException(status_code=500, detail=str(e))
 
 #PO Chatbot Functions
+user_supplier_cache = {} #initialize in case lead time logic needs to be implemented
 chat_histories = {}
 user_po_details = {}
 po_email_cache = defaultdict(set)
@@ -1676,8 +1679,8 @@ async def chat_with_po_assistant(request: ChatRequest):
         chat_histories[user_id].append(f"Bot: {bot_reply}")
         print("PO JSON:", po_json, "User ID:", user_id)
         po_email=po_json["Email"]
-        if(po_email):
-            po_email_cache[user_id].add(po_email)
+        # if(po_email):
+        #     po_email_cache[user_id].add(po_email)
 
         # Determine submission status
         if "Would you like to submit" in bot_reply:
@@ -1686,11 +1689,16 @@ async def chat_with_po_assistant(request: ChatRequest):
             submissionStatus = "submitted"
         elif "I want to change something" in bot_reply:
             submissionStatus = "cancelled"
-        elif po_email and po_email not in po_email_cache[user_id]:
-            submissionStatus = "pending"
+        # elif po_email and po_email not in po_email_cache[user_id]:
+        #     submissionStatus = "pending"
         else:
             submissionStatus = "in_progress"  # Default state if no clear intent is detected
         
+        if po_email:
+        # only if we’ve never seen it before do we override
+            if po_email not in po_email_cache[user_id]:
+                submissionStatus = "pending"
+            po_email_cache[user_id].add(po_email)
         print("PO submission status:", submissionStatus)
 
         return {
@@ -1866,27 +1874,91 @@ async def findPoDetails(po:str):
 
 
 @app.post("/clearData")
-async def clearConversation(submitted:str):
-    conversation.clear()
+async def clearConversation():
+    # conversation.clear()
+    # chat_histories.clear()
+    # previous_invoice_details.clear()
+    # previous_po_details.clear()
+    # previous_promo_details.clear()
+    # submissionStatus = "not submitted"
+    previous_promo_details.clear()  
+    promo_states.clear()
+    user_promo_details.clear()
+    promo_email_cache.clear()
+
+    user_supplier_cache.clear() #initialize in case lead time logic needs to be implemented
     chat_histories.clear()
-    previous_invoice_details.clear()
-    previous_po_details.clear()
-    previous_promo_details.clear()
-    submissionStatus = "not submitted"
+    user_po_details.clear()
+    po_email_cache.clear()
+
+    invoice_chat_histories.clear()
+    user_invoice_details.clear()
+    user_po_cache.clear()
+    invoice_email_cache.clear()
     return {"conversation":conversation,"submissionStatus":"not submitted","chat_history":chat_histories}
 
 @app.post("/clearDataNew")
 async def clearConversationNew(request: ChatRequestUser):
     user_id = request.user_id
-    chat_histories.clear()
-    previous_invoice_details.clear()
-    # previous_po_details.clear()
-    previous_promo_details.clear()
-    email_value = previous_po_details[user_id].get("Email")
-    previous_po_details[user_id].clear()
-    if email_value is not None:
-        previous_po_details[user_id]["Email"] = email_value
-    print("email and po:",email_value,previous_po_details)
+    # email_value = previous_po_details[user_id].get("Email")
+    # previous_po_details[user_id].clear()
+    # if email_value is not None:
+    #     previous_po_details[user_id]["Email"] = email_value
+    print("clear data before:", chat_histories, previous_invoice_details, previous_promo_details)
+
+    # 1) --- Purchase-Order module ---
+    # chat_histories is a dict of lists
+    if user_id in chat_histories:
+        chat_histories[user_id].clear()
+
+    # user_po_details is a dict of dicts
+    if user_id in user_po_details:
+        po_email = user_po_details[user_id].get("Email")
+        user_po_details[user_id].clear()
+        if po_email is not None:
+            user_po_details[user_id]["Email"] = po_email
+
+    # Also reset the per-user email cache if you want to force “pending” next time
+    po_email_cache[user_id].clear()
+
+
+    # 2) --- Promotion module ---
+    # promo_states is a dict of lists
+    if user_id in promo_states:
+        promo_states[user_id].clear()
+
+    # user_promo_details is a dict of dicts
+    if user_id in user_promo_details:
+        promo_email = user_promo_details[user_id].get("Email")
+        user_promo_details[user_id].clear()
+        if promo_email is not None:
+            user_promo_details[user_id]["Email"] = promo_email
+
+    if user_id in promo_email_cache:
+        promo_email_cache[user_id].clear()
+
+
+    # 3) --- Invoice module ---
+    # invoice_chat_histories is a dict of lists
+    if user_id in invoice_chat_histories:
+        invoice_chat_histories[user_id].clear()
+
+    # user_invoice_details is a dict of dicts
+    if user_id in user_invoice_details:
+        inv_email = user_invoice_details[user_id].get("Email")
+        user_invoice_details[user_id].clear()
+        if inv_email is not None:
+            user_invoice_details[user_id]["Email"] = inv_email
+
+    # Reset PO-lookup cache & email cache for invoice
+    if user_id in user_po_cache:
+        user_po_cache[user_id].clear()
+
+    if user_id in invoice_email_cache:
+        invoice_email_cache[user_id].clear()
+
+    print("clear data after:", chat_histories, previous_invoice_details, previous_promo_details)
+    # print("email and po:",email_value,previous_po_details)
     return {"conversation":conversation,"submissionStatus":"not submitted","chat_history":chat_histories}
 
 @app.post("/testSubmission")
@@ -1997,6 +2069,8 @@ def fetch_lead_time(supplier_id: str) -> list:
     
 invoice_chat_histories = {}
 user_invoice_details = {}
+user_po_cache = {}
+invoice_email_cache = defaultdict(set)
 
 @app.post("/creation/response") 
 async def generate_response(request: ChatRequest):
@@ -2082,15 +2156,24 @@ async def generate_response(request: ChatRequest):
         po_items=fetch_po_items(inv_details["PO Number"])
 
         # Determine submission status
-        submissionStatus = "not submitted"
+        # submissionStatus = "not submitted"
+        # if "Would you like to submit" in bot_reply:
+        #     submissionStatus = "pending"
+        # elif "Invoice created successfully" in bot_reply:
+        #     submissionStatus = "submitted"
+        # elif "I want to change something" in bot_reply:
+        #     submissionStatus = "cancelled"
+        # else:
+        #     submissionStatus = "in_progress"
+        submissionStatus = "in_progress"
         if "Would you like to submit" in bot_reply:
             submissionStatus = "pending"
-        elif "Invoice created successfully" in bot_reply:
+        elif "Purchase Order created successfully" in bot_reply:
             submissionStatus = "submitted"
         elif "I want to change something" in bot_reply:
             submissionStatus = "cancelled"
         else:
-            submissionStatus = "in_progress"
+            submissionStatus = "in_progress"  # Default state if no clear intent is detected
 
         # Additional processing from original implementation
         test_model_reply = testModel(user_message, bot_reply)
@@ -2117,17 +2200,15 @@ async def generate_response(request: ChatRequest):
             "conversation": invoice_chat_histories[user_id],
             "invoice_json": inv_details,
             "action": action,
-            "submissionStatus":form_submission,
+            # "submissionStatus":form_submission,
             "po_items":po_items,
-            # "submissionStatus": submissionStatus,
+            "submissionStatus": submissionStatus,
             "test_model_reply": test_model_reply,
             "invoiceDatafromConversation":inv_details,
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-user_po_cache = {}
 
 @app.post("/creation/response_new") 
 async def generate_response_new(request: ChatRequest):
@@ -2183,6 +2264,7 @@ async def generate_response_new(request: ChatRequest):
 
         # Handle function call
         if function_call and function_call.name == "query_database":
+            print("Function call: query database")
             args = json.loads(function_call.arguments)
             query_result = query_database_function(args["question"])
             query_called = True
@@ -2227,24 +2309,38 @@ async def generate_response_new(request: ChatRequest):
                     max_tokens=500
                 )
                 bot_reply = second_response.choices[0].message.content
+                # if not query_called and "Total Amount" in bot_reply or "Email" in bot_reply:
+                #     user_invoice_details[user_id] = await categorize_invoice_details_new(bot_reply, user_id)
+                # inv_details = user_invoice_details[user_id]
 
         # Update conversation history
         invoice_chat_histories[user_id].append(f"Bot: {bot_reply}")
+        invoice_email=inv_details["Email"]
 
         # Determine submission status from bot_reply
-        submissionStatus = "not submitted"
-        if "Would you like to submit" in bot_reply:
-            submissionStatus = "pending"
-        elif "Invoice created successfully" in bot_reply:
-            submissionStatus = "submitted"
-        elif "I want to change something" in bot_reply:
-            submissionStatus = "cancelled"
-        else:
-            submissionStatus = "in_progress"
+        # submissionStatus = "not submitted"
+        # if "Would you like to submit" in bot_reply:
+        #     submissionStatus = "pending"
+        # elif "Invoice created successfully" in bot_reply:
+        #     submissionStatus = "submitted"
+        # elif "I want to change something" in bot_reply:
+        #     submissionStatus = "cancelled"
+        # else:
+        #     submissionStatus = "in_progress"
 
         # Additional processing from original implementation
         test_model_reply = testModel(user_message, bot_reply)
         form_submission = test_submission(bot_reply)
+        # if invoice_email and invoice_email not in invoice_email_cache[user_id]:
+        #     form_submission = "pending"
+        
+        # if invoice_email:
+        #     invoice_email_cache[user_id].add(invoice_email)
+        if invoice_email:
+        # only if we’ve never seen it before do we override
+            if invoice_email not in invoice_email_cache[user_id]:
+                form_submission = "pending"
+            invoice_email_cache[user_id].add(invoice_email)
         
         # Determine action type
         action = 'action'
@@ -2272,6 +2368,7 @@ async def generate_response_new(request: ChatRequest):
             "po_items": po_items,  # Appended PO items if fetched
             "test_model_reply": test_model_reply,
             "invoiceDatafromConversation": inv_details,
+            "invoice_email":invoice_email
         }
 
     except Exception as e:

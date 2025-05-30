@@ -1,3 +1,4 @@
+import copy
 import os
 import datetime
 import openai
@@ -437,6 +438,12 @@ I support flexible formats for Items, Quantities, and Invoice Costs:
 
 I will:
 - Keep track of all entered details and fill in any missing ones in the same structured format. Each detail will be recorded as: [Detail Name]: [Provided Value], ensuring consistency with the format outlined above.
+- **Important**:  
+    1. **Immediately Display Recorded Details**: Whenever the user provides a valid input, record and **immediately display** that information in the response. This should include:
+    - The field just filled by the user (e.g., "Invoice Type: Merchandise").
+    - All previously recorded details.
+    2. **Show Missing Fields**: Always include a list of **missing fields** (details that the user has not yet provided). This allows the user to know what is still required.
+    - Missing fields should be shown clearly with labels like: "PO Number," "Date," "Items (Item ID,Quantity and Cost)," etc.
 - *Standardize formats*, such as:
   - Converting relative dates like "2 weeks from now" or "3 days from now" into "dd/mm/yyyy".
   - Converting different date formats like "MM/DD/YYYY", "YYYY/MM/DD", "DD.MM.YYYY", "DD-MM-YYYY", "Month Day, Year", "Day, Month DD, YYYY", "YYYY-MM-DD",etc to  "dd/mm/yyyy". 
@@ -672,7 +679,7 @@ Missing details (if any) will be listed below.
 Would you like to submit this information?  
 If you respond with 'Yes', I'll confirm with "Invoice created successfully. Thank you for choosing us."
 Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
-
+If you respond with an email id, I'll confirm with "Email sent successfully to [received email id].".
 
 """
 today = datetime.datetime.today().strftime("%d/%m/%Y")
@@ -713,18 +720,27 @@ def test_submission(query):
             {"role": "assistant", "content": query}
         ]
     )
-    follow_up_response_message = response.choices[0].message.content
+    # follow_up_response_message = response.choices[0].message.content
 
-    if follow_up_response_message == "Invoice Submission":
-        print("test_submission: Submission")
+    # if follow_up_response_message == "Invoice Submission":
+    #     print("test_submission: Submission")
+    #     return "submitted"
+    # elif follow_up_response_message == "Invoice Progressing":
+    #     print("Progressing test_submission")
+    # elif follow_up_response_message=="Invoice Fetch":
+    #     print("Fetch test_submission")
+    # else:
+    #     print("test_submission:No matches")
+    #     return "not submitted"
+    follow_up = response.choices[0].message.content
+    if follow_up == "Invoice Submission":
         return "submitted"
-    elif follow_up_response_message == "Invoice Progressing":
-        print("Progressing test_submission")
-    elif follow_up_response_message=="Invoice Fetch":
-        print("Fetch test_submission")
+    elif follow_up == "Invoice Progressing":
+        return "in_progress"
+    elif follow_up == "Invoice Fetch":
+        return "fetched"
     else:
-        print("test_submission:No matches")
-        return "not submitted"
+        return "not_submitted"
 
 
 def openaifunction():
@@ -783,6 +799,21 @@ def determine_action(query):
         return "fetch"
     return None
 
+DEFAULT_INVOICE_STRUCTURE = {
+    "PO Number": None,
+    "Invoice Number": None,
+    "Invoice Type": None,
+    "Date": None,
+    "Total Amount": None,
+    "Total Tax": None,
+    "Items": [],
+    # "Items": [{
+    #         "Item ID": None,
+    #         "Quantity": None,
+    #         "Invoice Cost": None
+    #         }],
+    "Email": None,
+}
 previous_invoice_details = {}
 async def categorize_invoice_details_new(extracted_text: str, user_id: str):
     client = openai.AsyncOpenAI()
@@ -826,26 +857,152 @@ Return the response as a valid JSON object like:
             response_format={"type": "json_object"}
         )
         raw_response = response.choices[0].message.content.strip()
+        print("Raw: ",raw_response)
         if raw_response.startswith("```json"):
             raw_response = raw_response[7:-3].strip()
         extracted_data = json.loads(raw_response)
 
         processed_data = {}
         for field, details in extracted_data.items():
-            is_example = details.get("is_example", False)
-            value = details.get("value")
-            if is_example:
-                processed_data[field] = [] if field == "Items" else None
+            # If Items comes back as a raw list, use it directly:
+            if field == "Items" and isinstance(details, list):
+                is_example = False
+                value      = details
             else:
-                processed_data[field] = value if value is not None else ([] if field == "Items" else None)
+                # Normal dict-with-value-and-is_example shape:
+                is_example = details.get("is_example", False)
+                value      = details.get("value")
+                if is_example:
+                    processed_data[field] = [] if field == "Items" else None
+                else:
+                    processed_data[field] = value if value is not None else ([] if field == "Items" else None)
 
-        previous_invoice_details[user_id] = processed_data
-        return processed_data
+        # Merge with previous invoice details
+        previous_data = previous_invoice_details.get(user_id, DEFAULT_INVOICE_STRUCTURE.copy())
+        merged_data = {}
+        
+        # Iterate through all fields in the default structure
+        for field in DEFAULT_INVOICE_STRUCTURE:
+            current_val = processed_data.get(field)
+            prev_val = previous_data.get(field)
+            
+            if field != "Items":
+                # For non-Items fields, retain previous value if current is None
+                merged_data[field] = current_val if current_val is not None else prev_val
+            else:
+                # Handle Items array merging
+                current_items = current_val if current_val is not None else []
+                prev_items = prev_val if prev_val is not None else []
+
+                # Preserve the longer array length
+                merged_items = []
+                max_len = max(len(current_items), len(prev_items))
+
+                for i in range(max_len):
+                    current_item = current_items[i] if i < len(current_items) else {}
+                    prev_item = prev_items[i] if i < len(prev_items) else {}
+                    
+                    # Check if current item has any non-null values
+                    current_has_data = any(
+                        current_item.get(key) is not None 
+                        for key in ["Item ID", "Quantity", "Invoice Cost"]
+                    )
+                    
+                    # Priority to current item if it contains any data
+                    if current_has_data:
+                        merged_item = {
+                            "Item ID": current_item.get("Item ID"),
+                            "Quantity": current_item.get("Quantity"),
+                            "Invoice Cost": current_item.get("Invoice Cost")
+                        }
+                    else:
+                        merged_item = {
+                            "Item ID": prev_item.get("Item ID"),
+                            "Quantity": prev_item.get("Quantity"),
+                            "Invoice Cost": prev_item.get("Invoice Cost")
+                        }
+                    
+                    # Fallback to default structure if needed
+                    merged_item = {
+                        key: value if value is not None else DEFAULT_INVOICE_STRUCTURE["Items"][0][key]
+                        for key, value in merged_item.items()
+                    }
+                    
+                    merged_items.append(merged_item)
+
+                merged_data["Items"] = merged_items
+        
+        # Update previous invoice details with merged data
+        previous_invoice_details[user_id] = merged_data
+        return merged_data
 
     except Exception as e:
         print(f"Error fetching invoice details: {e}")
+        # Return the last merged data if available
         return previous_invoice_details.get(user_id, {})
-    
+   
+# async def categorize_invoice_details_new(extracted_text: str, user_id: str):
+#     client = openai.AsyncOpenAI()
+
+#     prompt = f"""
+# Extract the following invoice details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
+#   - "value": the extracted field value (or null if missing).
+#   - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
+
+# The fields and their expected formats are:
+
+# - **PO Number** (alphanumeric, may appear as "PO ID", "Purchase Order Id","PO No.")
+# - **Invoice Number** (alphanumeric, may appear as "Invoice ID", "Bill No.")
+# - **Invoice Type**: (Normalize to one of [Merchandise, Non - Merchandise, Debit Note, Credit Note]. Accept variations or shorthand inputs such as "merch", "non merch", "debit", or "credit" and map them to the correct option.)
+# - **Date** (formatted as dd/mm/yyyy, may be labeled as "Invoice Date", "Billing Date")
+# - **Total Amount** (sum of item costs)
+# - **Total Tax** (10% of total amount)
+# - **Items**:(Array of objects, each containing):
+#     - **Item ID** (alphanumeric, may appear as "Product Code", "SKU", "Item No.")
+#     - **Quantity** (numeric, may appear as "Qty", "Quantity Ordered", "Units")
+#     - **Invoice Cost** (numeric, may appear as "Item Cost", "Total Cost per Item")
+# - **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
+
+
+# Use the exact field names as provided above. If a value is missing, set "value" to null (or [] for arrays) and "is_example" to false.
+
+# **Invoice Text:**
+# {extracted_text}
+
+# Return the response as a valid JSON object like:
+# "Field Name": {{ "value": ..., "is_example": true/false }}
+# """
+
+#     try:
+#         response = await client.chat.completions.create(
+#             model="gpt-4-turbo",
+#             messages=[
+#                 {"role": "system", "content": "Extract invoice details with per-field example flags as described."},
+#                 {"role": "user", "content": prompt}
+#             ],
+#             response_format={"type": "json_object"}
+#         )
+#         raw_response = response.choices[0].message.content.strip()
+#         if raw_response.startswith("```json"):
+#             raw_response = raw_response[7:-3].strip()
+#         extracted_data = json.loads(raw_response)
+
+#         processed_data = {}
+#         for field, details in extracted_data.items():
+#             is_example = details.get("is_example", False)
+#             value = details.get("value")
+#             if is_example:
+#                 processed_data[field] = [] if field == "Items" else None
+#             else:
+#                 processed_data[field] = value if value is not None else ([] if field == "Items" else None)
+
+#         previous_invoice_details[user_id] = processed_data
+#         return processed_data
+
+#     except Exception as e:
+#         print(f"Error fetching invoice details: {e}")
+#         return previous_invoice_details.get(user_id, {})
+   
 async def categorize_invoice_details_new_(extracted_text: str, user_id: str):
     client = openai.AsyncOpenAI()
     example_indicators = ["For example", "Example:", "e.g.", "like this", "such as"]

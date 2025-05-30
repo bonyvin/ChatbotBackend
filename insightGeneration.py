@@ -337,7 +337,7 @@ async def generate_supplier_insights(supplier_id: str, db_query_func: DbQueryFun
               "key_insights":f"{key_insights_text}",
               "graph_data":graph_data
               }
-    logging.info("insights dict: %s", insights)
+    # logging.info("insights dict: %s", insights)
 
     # Optional: Add alerts based on thresholds if needed
     # if risk_level == "High":
