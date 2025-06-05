@@ -209,6 +209,7 @@ Final stored values:
 
 Missing details (if any) will be listed below.  
 
+Once the details have been captured, call the 'details_validation' function for validation. If the details are valid, mention to the user that the details have been validated with the database and if they are invalid, prompt the user to fill in the correct information. 
 Would you like to submit this information?  
 If you respond with 'Yes', I'll confirm with *"Purchase Order created successfully. Thank you for choosing us."*  
 Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.

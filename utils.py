@@ -676,12 +676,15 @@ Let's validate the details:
 
 Missing details (if any) will be listed below.  
 
+
 Would you like to submit this information?  
 If you respond with 'Yes', I'll confirm with "Invoice created successfully. Thank you for choosing us."
 Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
 If you respond with an email id, I'll confirm with "Email sent successfully to [received email id].".
 
 """
+# Once the details have been captured, call the 'details_validation' function for validation. If the details are valid, mention to the user that the details have been validated with the database and if they are invalid, prompt the user to fill in the correct information. 
+
 today = datetime.datetime.today().strftime("%d/%m/%Y")
 template_5=template_5_without_date.replace("{current_date}", today)
 template_5_new=template_5_without_date_new.replace("{current_date}", today)

@@ -4,7 +4,6 @@ import uuid
 import json
 import traceback # For detailed error logging
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Annotated, Sequence, AsyncIterator
-
 import operator
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse # Import StreamingResponse
@@ -13,7 +12,6 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 from requests import Session # Assuming Session is used within get_db
 from fastapi.middleware.cors import CORSMiddleware
-
 # LangChain and LangGraph imports
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
@@ -31,10 +29,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
 from llm_templates import template_Invoice_without_date,po_database_schema,po_extraction_prompt,invoice_extraction_prompt
-# from promoUtils import template_Promotion_without_date
 
-# Assuming database.py and llm_templates.py are in the same directory or accessible
-# Mock these if they are not available in the execution environment
 try:
     from database import get_db # Make sure get_db returns a context manager or generator yielding a Session
 except ImportError:
@@ -95,84 +90,35 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
-    # Fallback for environments where .env might not be present (e.g., online platforms)
-    # You might need to set this manually or through platform secrets
     OPENAI_API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual key if needed
     if OPENAI_API_KEY == "YOUR_API_KEY_HERE":
          print("Warning: OPENAI_API_KEY not found in environment variables or .env. Using placeholder.")
-         # Consider raising an error if the key is essential:
-         # raise ValueError("OPENAI_API_KEY environment variable not set.")
-
-# Optional: Configure LangSmith tracing
-# os.environ["LANGCHAIN_TRACING_V2"] = "true"
-# os.environ["LANGCHAIN_PROJECT"] = "Your LangSmith Project Name"
-# os.environ["LANGCHAIN_API_KEY"] = "Your LangSmith API Key" # If needed
 
 print(f"LangSmith tracing enabled: {os.getenv('LANGCHAIN_TRACING_V2') == 'true'}")
 print(f"LangSmith project: {os.getenv('LANGCHAIN_PROJECT')}")
-
-# Using Literal for simplicity as there are a fixed set of strings
 InvoiceType = Literal["Merchandise", "Non - Merchandise", "Debit Note", "Credit Note"]
 
-# Define the Pydantic model for individual items within the invoice
-class InvoiceItem(BaseModel):
-    """
-    Represents a single item within an invoice, with flexible field naming.
-    """
-    item_id: Optional[str] = Field(..., validation_alias=AliasChoices('Item ID', 'Product Code', 'SKU', 'Item No.'))
-    quantity: Optional[int] = Field(..., validation_alias=AliasChoices('Quantity', 'Qty', 'Quantity Ordered', 'Units'))
-    invoice_cost: Optional[float] = Field(..., validation_alias=AliasChoices('Invoice Cost', 'Item Cost', 'Total Cost per Item'))
+class ExtractedField(BaseModel):
+    value: Optional[Any] = None
+    is_example: bool = False
 
-    class Config:
-        populate_by_name = True
-        extra = 'ignore'
+class ExtractedInvoiceItem(BaseModel):
+    item_id: Optional[ExtractedField] = None
+    quantity: Optional[ExtractedField] = None
+    invoice_cost: Optional[ExtractedField] = None
 
-# Define the main Pydantic model for extracted invoice details
 class ExtractedInvoiceDetails(BaseModel):
-    """
-    Pydantic model to represent extracted invoice details,
-    allowing for flexible field naming and normalization of 'Invoice Type'.
-    """
-    po_number: Optional[str] = Field(None, validation_alias=AliasChoices('PO Number', 'PO ID', 'Purchase Order Id', 'PO No.'))
-    invoice_number: Optional[str] = Field(..., validation_alias=AliasChoices('Invoice Number', 'Invoice ID', 'Bill No.'))
-    invoice_type: Optional[InvoiceType] # Will be validated and normalized by the validator below
-    date: Optional[str] = Field(..., validation_alias=AliasChoices('Date', 'Invoice Date', 'Billing Date'))
-    total_amount: Optional[float] = Field(..., validation_alias=AliasChoices('Total Amount', 'Invoice Total', 'Amount Due'))
-    total_tax: Optional[float] = Field(..., validation_alias=AliasChoices('Total Tax', 'Tax Amount', 'VAT'))
-    items: Optional[List[InvoiceItem]] = Field(default_factory=list, validation_alias=AliasChoices('Items', 'Invoice Items', 'Products'))
-    supplier_id: Optional[str] = Field(..., validation_alias=AliasChoices('SupplierId', 'Supplier', 'Supp Id'))
-    email: Optional[EmailStr]  = Field(..., validation_alias=AliasChoices('Email', 'Email Address', 'Contact Email'))
-    @field_validator('invoice_type', mode='before')
-    @classmethod
-    def normalize_invoice_type(cls, v: str) -> str:
-        """
-        Normalizes the invoice type string to one of the predefined values.
-        Handles variations and shorthand inputs.
-        """
-        if isinstance(v, str):
-            lower_v = v.strip().lower()
-            if lower_v in ["merchandise", "merch"]:
-                return "Merchandise"
-            elif lower_v in ["non - merchandise", "non-merchandise", "non merch"]:
-                return "Non - Merchandise"
-            elif lower_v in ["debit note", "debit"]:
-                return "Debit Note"
-            elif lower_v in ["credit note", "credit"]:
-                return "Credit Note"
-        # If it doesn't match any known variations, let Pydantic's Literal validation handle it.
-        # This will raise a ValidationError if 'v' is not one of the Literal values.
-        return v
-
-    class Config:
-        populate_by_name = True # Allows using field names (e.g., invoice_number) as well as aliases
-        extra = 'ignore' # Ignore any extra fields the LLM might hallucinate that are not defined
-
+    po_number: Optional[ExtractedField] = None
+    invoice_number: Optional[ExtractedField] = None
+    invoice_type: Optional[ExtractedField] = None
+    date: Optional[ExtractedField] = None
+    total_amount: Optional[ExtractedField] = None
+    total_tax: Optional[ExtractedField] = None
+    items: Optional[List[ExtractedInvoiceItem]] = None
+    supplier_id: Optional[ExtractedField] = None
+    email: Optional[ExtractedField] = None
 # --- LangChain/LangGraph Setup ---
 
-# Initialize LLMs
-# Main conversational LLM (ensure streaming=True for the node that streams to client)
-# Note: Streaming is handled by the graph runner (`astream_events`),
-# so individual nodes can use `ainvoke` if their *final* result is needed for the state.
 # The node intended for streaming *back to the user* should use a streaming LLM.
 chat_model = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, streaming=True, temperature=0.7)
 
@@ -186,10 +132,8 @@ extractor_llm_structured = extractor_llm.with_structured_output(
     method="function_calling", # Or "json_mode"
     include_raw=False
 )
-
 # --- Database Schema and Helper Functions ---
 TABLE_SCHEMA = po_database_schema
-
 # Memoized table names to avoid repeated DB calls
 _table_names_cache = None
 
@@ -304,36 +248,6 @@ async def generate_sql(state: GraphState) -> Dict:
 
     return {"generated_sql": generated_sql}
 
-async def get_po_details(po_id: str) -> List[Dict[str, Any]]:
-    """
-    Fetch all rows from podetails for the given purchase-order ID.
-    Returns a list of dicts, one per row.
-    """
-    # Parameterized SQL to avoid injection and handle quoting
-    sql = text("SELECT * FROM podetails WHERE poId = :po_id")
-    try:
-        # Acquire a session (sync). Adjust if using async.
-        db = next(get_db())
-        print(f"--- Executing SQL Query: {sql} with po_id={po_id} ---")
-
-        result = db.execute(sql, {"po_id": po_id}).mappings().all()
-        supplier_id= [item['supplierId'] for item in result]
-        item_id=[item['itemId'] for item in result]
-        # `.mappings().all()` returns a list of RowMapping → dict-like
-        print("Supplier Id: ",supplier_id,item_id)
-        print(f"--- Query Execution Successful: Fetched {len(result)} rows ---")
-        return [dict(row) for row in result]
-
-    except Exception as e:
-        print(f"!!! Error executing SQL query: {e} !!!")
-        traceback.print_exc()
-        return []
-    finally:
-        # Always close the session if that's your pattern
-        try:
-            db.close()
-        except Exception:
-            pass
 
 async def execute_sql(state: GraphState) -> Dict:
     """
@@ -405,7 +319,6 @@ async def execute_sql(state: GraphState) -> Dict:
         sql_results = error_msg # Return the error message string
 
     return {"sql_results": sql_results}
-
 
 async def generate_response_from_sql(state: 'GraphState') -> Dict:
     """
@@ -512,6 +425,37 @@ async def generate_response_from_sql(state: 'GraphState') -> Dict:
     # The client stream is handled by astream_events processing the same LLM call
     return {"llm_response_content": final_content, "messages": [response_message]}
 
+async def get_po_details(po_id: str) -> List[Dict[str, Any]]:
+    """
+    Fetch all rows from podetails for the given purchase-order ID.
+    Returns a list of dicts, one per row.
+    """
+    # Parameterized SQL to avoid injection and handle quoting
+    sql = text("SELECT * FROM podetails WHERE poId = :po_id")
+    try:
+        # Acquire a session (sync). Adjust if using async.
+        db = next(get_db())
+        print(f"--- Executing SQL Query: {sql} with po_id={po_id} ---")
+
+        result = db.execute(sql, {"po_id": po_id}).mappings().all()
+        supplier_id= [item['supplierId'] for item in result]
+        item_id=[item['itemId'] for item in result]
+        # `.mappings().all()` returns a list of RowMapping → dict-like
+        print("Supplier Id: ",supplier_id,item_id)
+        print(f"--- Query Execution Successful: Fetched {len(result)} rows ---")
+        return [dict(row) for row in result]
+
+    except Exception as e:
+        print(f"!!! Error executing SQL query: {e} !!!")
+        traceback.print_exc()
+        return []
+    finally:
+        # Always close the session if that's your pattern
+        try:
+            db.close()
+        except Exception:
+            pass
+
 async def generate_direct_response(state: 'GraphState') -> Dict:
     """
     Node to generate a response directly using the LLM when SQL is not applicable.
@@ -585,53 +529,53 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
     # The client stream is handled by astream_events processing the same LLM call
     return {"llm_response_content": final_content, "messages": [response_message]}
 
-# async def extract_details(state: GraphState) -> Dict:
-#     """
-#     Node to extract structured details from the final LLM response content.
-#     This happens server-side after the response is generated.
-#     """
-#     print("--- Node: extract_details ---")
-#     response_text = state.get("llm_response_content")
-#     extracted_data: Optional[ExtractedInvoiceDetails] = None # Default
+async def extract_details(state: GraphState) -> Dict:
+    """
+    Node to extract structured details from the final LLM response content.
+    This happens server-side after the response is generated.
+    """
+    print("--- Node: extract_details ---")
+    response_text = state.get("llm_response_content")
+    extracted_data: Optional[ExtractedInvoiceDetails] = None # Default
 
-#     if not response_text:
-#         print("--- No LLM response text found for extraction. Skipping. ---")
-#         return {"extracted_details": None}
+    if not response_text:
+        print("--- No LLM response text found for extraction. Skipping. ---")
+        return {"extracted_details": None}
 
-#     # Simple instruction for the extractor LLM
-#     today = datetime.datetime.now().strftime("%d/%m/%Y")
-#     extraction_prompt = ChatPromptTemplate.from_messages([
-#         ("system", invoice_extraction_prompt),
-#         #changed promotion to po
-#         ("human", "Extract purchase order details from this text:\n\n```text\n{text_to_extract}\n```")
-#     ])
+    # Simple instruction for the extractor LLM
+    today = datetime.datetime.now().strftime("%d/%m/%Y")
+    extraction_prompt = ChatPromptTemplate.from_messages([
+        ("system", invoice_extraction_prompt),
+        #changed promotion to po
+        ("human", "Extract purchase order details from this text:\n\n```text\n{text_to_extract}\n```")
+    ])
 
-#     # Create the extraction chain
-#     extraction_chain = extraction_prompt | extractor_llm_structured
+    # Create the extraction chain
+    extraction_chain = extraction_prompt | extractor_llm_structured
 
-#     try:
-#         # Limit input text length for safety/cost
-#         max_len = 8000
-#         truncated_text = response_text[:max_len] + ("..." if len(response_text) > max_len else "")
+    try:
+        # Limit input text length for safety/cost
+        max_len = 8000
+        truncated_text = response_text[:max_len] + ("..." if len(response_text) > max_len else "")
 
-#         print(f"--- Extracting details from: '{truncated_text[:200]}...' ---")
-#         llm_extracted_data = await extraction_chain.ainvoke({"text_to_extract": truncated_text})
+        print(f"--- Extracting details from: '{truncated_text[:200]}...' ---")
+        llm_extracted_data = await extraction_chain.ainvoke({"text_to_extract": truncated_text})
 
-#         if llm_extracted_data and isinstance(llm_extracted_data, ExtractedInvoiceDetails):
-#             print("--- Extraction Successful ---")
-#             extracted_data = llm_extracted_data
-#             print(f"Extracted Data: {extracted_data.model_dump_json(indent=2)}") # Log extracted data
-#         elif llm_extracted_data:
-#              print(f"--- Extraction returned unexpected type: {type(llm_extracted_data)} ---")
-#         else:
-#             print("--- Extraction returned no data. ---")
+        if llm_extracted_data and isinstance(llm_extracted_data, ExtractedInvoiceDetails):
+            print("--- Extraction Successful ---")
+            extracted_data = llm_extracted_data
+            print(f"Extracted Data: {extracted_data.model_dump_json(indent=2)}") # Log extracted data
+        elif llm_extracted_data:
+             print(f"--- Extraction returned unexpected type: {type(llm_extracted_data)} ---")
+        else:
+            print("--- Extraction returned no data. ---")
 
-#     except Exception as e:
-#         print(f"!!! ERROR during detail extraction: {e} !!!")
-#         traceback.print_exc()
-#         # Keep extracted_data as None
+    except Exception as e:
+        print(f"!!! ERROR during detail extraction: {e} !!!")
+        traceback.print_exc()
+        # Keep extracted_data as None
 
-#     return {"extracted_details": extracted_data}
+    return {"extracted_details": extracted_data}
 
 po_details_tool = Tool(
     name="get_po_details",
@@ -644,7 +588,7 @@ po_details_tool = Tool(
     }
 )
 
-# Chat model with function-calling enabled
+# Update the extractor LLM to use the new model
 extractor_llm_structured = ChatOpenAI(
     model="gpt-4o-mini",
     api_key=OPENAI_API_KEY,
@@ -655,115 +599,7 @@ extractor_llm_structured = ChatOpenAI(
     include_raw=False
 )
 
-
-# async def extract_details(state: GraphState) -> Dict:
-#     """
-#     Extract invoice fields and enrich with PO details if present, using function-calling.
-#     """
-#     print("--- Node: extract_details (function-calling) ---")
-#     text = state.get("llm_response_content") or ""
-#     if not text:
-#         return {"extracted_details": None}
-
-#     # 1. First pass: ask LLM to extract and possibly call get_po_details
-#     system_msg = SystemMessage(content=invoice_extraction_prompt)
-#     human_msg = HumanMessage(content=f"Extract invoice details from:\n\n{text}")
-#     first_resp = await extractor_agent.apredict_messages([system_msg, human_msg])
-
-#     # 2. If LLM requested PO details, call the function
-#     messages = [system_msg, human_msg, first_resp]
-#     if first_resp.additional_kwargs.get("function_call"):
-#         fc = first_resp.additional_kwargs["function_call"]
-#         args = json.loads(fc["arguments"])
-#         po_rows = await get_po_details(args["po_id"])
-#         # Build function response message
-#         func_msg = FunctionMessage(
-#             name=fc["name"],
-#             content=json.dumps(po_rows)
-#         )
-#         messages.append(func_msg)
-
-#         # 3. Second pass: let LLM integrate PO data
-#         final_resp = await extractor_agent.apredict_messages(messages)
-#         result = final_resp.content
-#     else:
-#         # No PO call needed
-#         result = first_resp.content
-
-#     # 4. Parse the JSON into our Pydantic model
-#     try:
-#         extracted: ExtractedInvoiceDetails = ExtractedInvoiceDetails.parse_raw(result)
-#     except Exception as e:
-#         print(f"Error parsing extraction result: {e}")
-#         return {"extracted_details": None}
-
-#     return {"extracted_details": extracted}
-
-async def extract_details(state: GraphState) -> Dict:
-    """
-    Extract invoice fields and enrich with PO details if present, using structured output.
-    Incorporates PO details (item_ids and supplier_id) into the final extraction.
-    """
-    print("--- Node: extract_details (structured) ---")
-    text = state.get("llm_response_content") or ""
-    if not text:
-        return {"extracted_details": None}
-
-    # Prepare extraction prompt
-    today = datetime.datetime.now().strftime("%d/%m/%Y")
-    extraction_prompt = ChatPromptTemplate.from_messages([
-        ("system", invoice_extraction_prompt),
-        ("human", "Extract purchase order details from this text:\n\n```text\n{text_to_extract}\n```")
-    ])
-
-    extraction_chain = extraction_prompt | extractor_llm_structured
-
-    try:
-        # Limit input text length for safety/cost
-        max_len = 8000
-        truncated_text = text[:max_len] + ("..." if len(text) > max_len else "")
-
-        print(f"--- Extracting details from: '{truncated_text[:200]}...' ---")
-        extracted = await extraction_chain.ainvoke({"text_to_extract": truncated_text})
-        purchase_order_id=extracted.po_number.value
-        print("Purchase Order ID: ",purchase_order_id)
-        # Check if we have a PO number to fetch details
-        if extracted.po_number:
-            print(f"--- Fetching PO details for: {extracted.po_number} ---")
-            po_details = await get_po_details(extracted.po_number)
-            
-            if po_details:
-                print(f"--- Found {len(po_details)} PO items ---")
-                # Extract supplier_id from the first row of PO details
-                first_po_row = po_details[0]
-                supplier_id_from_po = first_po_row.get('supplierId')
-                if supplier_id_from_po:
-                    extracted.supplier_id = supplier_id_from_po
-                    
-                # Create items list from PO details
-                po_items = []
-                for po_item in po_details:
-                    po_items.append(InvoiceItem(
-                        item_id=po_item.get('itemId'),
-                        quantity=po_item.get('itemQuantity', 0),  # Default to 0 if not found
-                        invoice_cost=po_item.get('itemCost', 0.0)  # Default to 0.0 if not found
-                    ))
-                
-                # Replace extracted items with PO items
-                extracted.items = po_items
-
-        print("--- Extraction Successful ---")
-        print(f"Extracted Data: {extracted.model_dump_json(indent=2)}")
-        return {"extracted_details": extracted}
-
-    except Exception as e:
-        print(f"!!! ERROR during detail extraction: {e} !!!")
-        traceback.print_exc()
-        return {"extracted_details": None}
-
-
 # --- Conditional Edges ---
-
 def should_execute_sql(state: GraphState) -> str:
     """Determines the next step based on whether SQL was generated."""
     print("--- Condition: should_execute_sql ---")
@@ -775,9 +611,7 @@ def should_execute_sql(state: GraphState) -> str:
         return "generate_direct_response"
 
 # --- Build the Workflow ---
-
 workflow = StateGraph(GraphState)
-
 # Add nodes
 workflow.add_node("preprocess_input", preprocess_input)
 workflow.add_node("generate_sql", generate_sql)
@@ -785,11 +619,9 @@ workflow.add_node("execute_sql", execute_sql)
 workflow.add_node("generate_response_from_sql", generate_response_from_sql)
 workflow.add_node("generate_direct_response", generate_direct_response)
 workflow.add_node("extract_details", extract_details)
-
 # Define edges
 workflow.add_edge(START, "preprocess_input") # Start with preprocessing
 workflow.add_edge("preprocess_input", "generate_sql")
-
 # Conditional routing after trying to generate SQL
 workflow.add_conditional_edges(
     "generate_sql",
@@ -799,17 +631,13 @@ workflow.add_conditional_edges(
         "generate_direct_response": "generate_direct_response",
     },
 )
-
 # Path if SQL was executed
 workflow.add_edge("execute_sql", "generate_response_from_sql")
 workflow.add_edge("generate_response_from_sql", "extract_details") # Extract after generating response
-
 # Path if SQL was not generated
 workflow.add_edge("generate_direct_response", "extract_details") # Extract after generating response
-
 # Final step after extraction
 workflow.add_edge("extract_details", END)
-
 # --- Memory and Compilation ---
 memory = MemorySaver()
 app_runnable = workflow.compile(checkpointer=memory)
@@ -838,7 +666,6 @@ class ChatRequest(BaseModel):
     message: str
     thread_id: str | None = None
 
-
 async def stream_response_generator(
     graph_stream: AsyncIterator[Dict]
 ) -> AsyncIterator[str]:
@@ -853,7 +680,7 @@ async def stream_response_generator(
             if event["event"] == "on_chat_model_stream":
                 metadata = event.get("metadata", {})
                 node_name = metadata.get("langgraph_node")
-                if node_name in {"generate_direct_response", "generate_response_from_sql"}:
+                if node_name in {"generate_direct_response", "generate_response_from_sql","extract_details"}:
                     chunk = event["data"].get("chunk")
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         content = chunk.content
@@ -866,8 +693,6 @@ async def stream_response_generator(
     finally:
         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
         # For debugging, you could log full_response_for_log here
-
-
             
 # --- FastAPI Endpoint ---
 @app.post("/chat/")

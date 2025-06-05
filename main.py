@@ -1594,12 +1594,322 @@ def query_database_function(question: str) -> str:
 #     except Exception as e:
 #         raise HTTPException(status_code=500, detail=str(e))
 
+def details_validator_po(db: Session, supplier_id: str = None, item_ids: list = None):
+    """
+    Validates Supplier ID and Item IDs against the database.
+    - Supplier ID is checked against the 'suppliers' table.
+    - Item IDs are checked for existence in 'itemmaster'.
+    """
+    validation_results = {
+        "supplier_id_provided": supplier_id,
+        "supplier_exists": None, # None indicates not checked or error, False means checked and not found
+        "items_provided_count": len(item_ids) if item_ids else 0,
+        "all_items_exist": None, # None indicates not checked or error (e.g. empty item_ids list)
+        "item_validation_details": [] # List of dicts: {'item_id': id, 'exists': True/False}
+    }
+
+    if not supplier_id and not item_ids:
+        validation_results["message"] = "No supplier ID or item IDs provided for validation."
+        return validation_results
+
+    # Validate Supplier ID
+    if supplier_id:
+        try:
+            query_supplier = text("SELECT 1 FROM suppliers WHERE supplierId = :supplier_id LIMIT 1")
+            result_supplier = db.execute(query_supplier, {"supplier_id": supplier_id}).fetchone()
+            validation_results["supplier_exists"] = bool(result_supplier)
+        except Exception as e:
+            print(f"Error validating supplier ID {supplier_id}: {e}")
+            validation_results["supplier_exists"] = False # Consider it as not existing on error
+            validation_results["supplier_validation_error"] = str(e)
+
+    # Validate Item IDs
+    if item_ids:
+        all_found = True
+        processed_ids = set() # To handle duplicate item_ids in the input list efficiently
+
+        for item_id in item_ids:
+            if not item_id or item_id in processed_ids: # Skip empty or already processed IDs
+                if not item_id and validation_results["all_items_exist"] is None and not any(d['item_id'] == item_id for d in validation_results["item_validation_details"]):
+                     # If an empty item ID is passed, mark as not existing.
+                     validation_results["item_validation_details"].append({'item_id': item_id, 'exists': False})
+                     all_found = False
+                continue
+            
+            item_detail = {'item_id': item_id, 'exists': False}
+            try:
+                # Check if item exists in any of the relevant tables
+                query_item = text("""
+                    SELECT 1 FROM (
+                        SELECT itemId FROM itemmaster WHERE itemId = :item_id
+                    ) AS combined_items LIMIT 1
+                """)
+                result_item = db.execute(query_item, {"item_id": item_id}).fetchone()
+                if result_item:
+                    item_detail['exists'] = True
+                else:
+                    all_found = False # Mark false if any item doesn't exist
+            except Exception as e:
+                print(f"Error validating item ID {item_id}: {e}")
+                all_found = False # Mark false on error for this item
+                item_detail['item_validation_error'] = str(e)
+            
+            validation_results["item_validation_details"].append(item_detail)
+            processed_ids.add(item_id)
+        
+        validation_results["all_items_exist"] = all_found if item_ids else None # Only set if item_ids were provided
+    elif not item_ids and validation_results["items_provided_count"] == 0 :
+        validation_results["all_items_exist"] = None # Or True, if no items to check means all (non-existent) items are valid.
+
+    return validation_results
+
+
+def details_validator_invoice(db: Session, item_ids: list = None):
+    """
+    Validates Item IDs against the database.
+    - Item IDs are checked for existence in 'itemmaster'.
+    """
+    validation_results = {
+        "items_provided_count": len(item_ids) if item_ids else 0,
+        "all_items_exist": None, # None indicates not checked or error (e.g. empty item_ids list)
+        "item_validation_details": [] # List of dicts: {'item_id': id, 'exists': True/False}
+    }
+    # Validate Item IDs
+    if item_ids:
+        all_found = True
+        processed_ids = set() # To handle duplicate item_ids in the input list efficiently
+
+        for item_id in item_ids:
+            if not item_id or item_id in processed_ids: # Skip empty or already processed IDs
+                if not item_id and validation_results["all_items_exist"] is None and not any(d['item_id'] == item_id for d in validation_results["item_validation_details"]):
+                     # If an empty item ID is passed, mark as not existing.
+                     validation_results["item_validation_details"].append({'item_id': item_id, 'exists': False})
+                     all_found = False
+                continue
+            
+            item_detail = {'item_id': item_id, 'exists': False}
+            try:
+                # Check if item exists in any of the relevant tables
+                query_item = text("""
+                    SELECT 1 FROM (
+                        SELECT itemId FROM itemmaster WHERE itemId = :item_id
+                    ) AS combined_items LIMIT 1
+                """)
+                result_item = db.execute(query_item, {"item_id": item_id}).fetchone()
+                if result_item:
+                    item_detail['exists'] = True
+                else:
+                    all_found = False # Mark false if any item doesn't exist
+            except Exception as e:
+                print(f"Error validating item ID {item_id}: {e}")
+                all_found = False # Mark false on error for this item
+                item_detail['item_validation_error'] = str(e)
+            
+            validation_results["item_validation_details"].append(item_detail)
+            processed_ids.add(item_id)
+        
+        validation_results["all_items_exist"] = all_found if item_ids else None # Only set if item_ids were provided
+    elif not item_ids and validation_results["items_provided_count"] == 0 :
+        validation_results["all_items_exist"] = None # Or True, if no items to check means all (non-existent) items are valid.
+
+    return validation_results
+
+# def details_validator_invoice(db: Session, po_number: str = None, item_ids: list = None):
+#     """
+#     Validates Purchase Order Number and Item IDs against the database.
+#     - Purchase Order Number is checked against the 'podetails' table.
+#     - Item IDs are checked for existence in 'itemmaster'.
+#     """
+#     validation_results = {
+#         "po_number_provided": po_number,
+#         "po_exists": None, # None indicates not checked or error, False means checked and not found
+#         "items_provided_count": len(item_ids) if item_ids else 0,
+#         "all_items_exist": None, # None indicates not checked or error (e.g. empty item_ids list)
+#         "item_validation_details": [] # List of dicts: {'item_id': id, 'exists': True/False}
+#     }
+
+#     if not po_number and not item_ids:
+#         validation_results["message"] = "No Purchase Order Number or item IDs provided for validation."
+#         return validation_results
+
+#     # Validate Purchase Order ID
+#     if po_number:
+#         try:
+#             query_po = text("SELECT 1 FROM podetails WHERE poId= :po_number LIMIT 1")
+#             result_po = db.execute(query_po, {"po_number": po_number}).fetchone()
+#             validation_results["po_exists"] = bool(result_po)
+#         except Exception as e:
+#             print(f"Error validating Purchase Order ID {po_number}: {e}")
+#             validation_results["po_exists"] = False # Consider it as not existing on error
+#             validation_results["po_validation_error"] = str(e)
+
+#     # Validate Item IDs
+#     if item_ids:
+#         all_found = True
+#         processed_ids = set() # To handle duplicate item_ids in the input list efficiently
+
+#         for item_id in item_ids:
+#             if not item_id or item_id in processed_ids: # Skip empty or already processed IDs
+#                 if not item_id and validation_results["all_items_exist"] is None and not any(d['item_id'] == item_id for d in validation_results["item_validation_details"]):
+#                      # If an empty item ID is passed, mark as not existing.
+#                      validation_results["item_validation_details"].append({'item_id': item_id, 'exists': False})
+#                      all_found = False
+#                 continue
+            
+#             item_detail = {'item_id': item_id, 'exists': False}
+#             try:
+#                 # Check if item exists in any of the relevant tables
+#                 query_item = text("""
+#                     SELECT 1 FROM (
+#                         SELECT itemId FROM itemmaster WHERE itemId = :item_id
+#                     ) AS combined_items LIMIT 1
+#                 """)
+#                 result_item = db.execute(query_item, {"item_id": item_id}).fetchone()
+#                 if result_item:
+#                     item_detail['exists'] = True
+#                 else:
+#                     all_found = False # Mark false if any item doesn't exist
+#             except Exception as e:
+#                 print(f"Error validating item ID {item_id}: {e}")
+#                 all_found = False # Mark false on error for this item
+#                 item_detail['item_validation_error'] = str(e)
+            
+#             validation_results["item_validation_details"].append(item_detail)
+#             processed_ids.add(item_id)
+        
+#         validation_results["all_items_exist"] = all_found if item_ids else None # Only set if item_ids were provided
+#     elif not item_ids and validation_results["items_provided_count"] == 0 :
+#         validation_results["all_items_exist"] = None # Or True, if no items to check means all (non-existent) items are valid.
+
+#     return validation_results
+
 #PO Chatbot Functions
 user_supplier_cache = {} #initialize in case lead time logic needs to be implemented
 chat_histories = {}
 user_po_details = {}
 po_email_cache = defaultdict(set)
 
+# @app.post("/chat")
+# async def chat_with_po_assistant(request: ChatRequest):
+#     user_id = request.user_id
+#     user_message = request.message
+
+#     # Maintain user session
+#     if user_id not in chat_histories:
+#         chat_histories[user_id] = []
+#         user_po_details[user_id] = DEFAULT_PO_STRUCTURE.copy()
+    
+#     chat_histories[user_id].append(f"User: {user_message}")
+#     conversation = "\n".join(chat_histories[user_id])
+
+#     try:
+#         # First API call - with function definition
+#         messages = [
+#             {"role": "system", "content": template_PO},
+#             {"role": "user", "content": conversation}
+#         ]
+
+#         functions = [{
+#             "name": "query_database",
+#             "description": "Retrieve data from the database using SQL queries",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                     "question": {
+#                         "type": "string", 
+#                         "description": "Natural language question requiring database data"
+#                     }
+#                 },
+#                 "required": ["question"]
+#             }
+#         },{
+#             "name":"details_validation",
+#             "description":"Validates the received data with the database using SQL Queries",
+#         }
+        
+#         ]
+
+#         response = client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=messages,
+#             functions=functions,
+#             function_call="auto",
+#             temperature=0.7,
+#             max_tokens=500
+#         )
+
+#         response_message = response.choices[0].message
+#         bot_reply = response_message.content
+#         function_call = response_message.function_call
+#         query_called = False
+
+#         # Handle function call
+#         if function_call and function_call.name == "query_database":
+#             args = json.loads(function_call.arguments)
+#             query_result = query_database_function(args["question"])
+#             query_called = True
+
+#             # Append function response to messages
+#             messages.append({
+#                 "role": "function", 
+#                 "name": "query_database",
+#                 "content": query_result
+#             })
+
+#             # Second API call with function result
+#             second_response = client.chat.completions.create(
+#                 model="gpt-4o",
+#                 messages=messages,
+#                 temperature=0.7,
+#                 max_tokens=500
+#             )
+#             bot_reply = second_response.choices[0].message.content
+
+#         # Retain po_json from previous interaction if query_called is True
+#         if not query_called:
+#             user_po_details[user_id] = await categorize_po_details(bot_reply, user_id)
+
+#         po_json = user_po_details[user_id]  # Assign retained po_json
+#         chat_histories[user_id].append(f"Bot: {bot_reply}")
+#         print("PO JSON:", po_json, "User ID:", user_id)
+#         po_email=po_json["Email"]
+#         items=po_json["Items"]
+#         item_ids=[item['Item ID'] for item in items]
+#         supplier_id=po_json["Supplier ID"]
+#         # if(po_email):
+#         #     po_email_cache[user_id].add(po_email)
+
+#         # Determine submission status
+#         if "Would you like to submit" in bot_reply:
+#             submissionStatus = "pending"
+#         elif "Purchase Order created successfully" in bot_reply:
+#             submissionStatus = "submitted"
+#         elif "I want to change something" in bot_reply:
+#             submissionStatus = "cancelled"
+#         # elif po_email and po_email not in po_email_cache[user_id]:
+#         #     submissionStatus = "pending"
+#         else:
+#             submissionStatus = "in_progress"  # Default state if no clear intent is detected
+        
+#         if po_email:
+#         # only if we’ve never seen it before do we override
+#             if po_email not in po_email_cache[user_id]:
+#                 submissionStatus = "pending"
+#             po_email_cache[user_id].add(po_email)
+#         print("PO submission status:", submissionStatus)
+
+#         return {
+#             "user_id": user_id,
+#             "bot_reply": bot_reply,
+#             "chat_history": chat_histories,
+#             "po_json": po_json,  # Retains values if query_called is True
+#             "submissionStatus": submissionStatus,
+#             "po_email":po_email
+
+#         }
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 @app.post("/chat")
 async def chat_with_po_assistant(request: ChatRequest):
     user_id = request.user_id
@@ -1633,7 +1943,29 @@ async def chat_with_po_assistant(request: ChatRequest):
                 },
                 "required": ["question"]
             }
-        }]
+        },
+        {
+                "name": "details_validation", # LLM function name
+                "description": "Validates Supplier ID and a list of Item IDs against the database.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "supplier_id": {
+                            "type": "string",
+                            "description": "The Supplier ID to validate (optional)."
+                        },
+                        "item_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "A list of Item IDs to validate (optional)."
+                        }
+                    },
+                    # No 'required' fields means LLM can call it with supplier_id, item_ids, or both, or neither.
+                    # The Python function details_validator_po handles these cases.
+                }
+            }
+        
+        ]
 
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -1670,6 +2002,35 @@ async def chat_with_po_assistant(request: ChatRequest):
                 max_tokens=500
             )
             bot_reply = second_response.choices[0].message.content
+        elif function_call.name == "details_validation":
+            args = json.loads(function_call.arguments)
+            supplier_id_to_validate = args.get("supplier_id")
+            item_ids_to_validate = args.get("item_ids", []) # Default to empty list
+
+            db_session: Session = next(get_db())
+            try:
+                validation_result = details_validator_po(db_session, supplier_id_to_validate, item_ids_to_validate)
+                validation_info_for_llm = json.dumps(validation_result) # For LLM context
+                print("LLM-triggered Validation Outcome:", validation_result)
+            finally:
+                db_session.close()
+            
+                        # Append function response to messages
+            messages.append({
+                "role": "function", 
+                "name": "details_validation",
+                "content": validation_info_for_llm
+            })
+
+            # Second API call with function result
+            second_response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=500
+            )
+            bot_reply = second_response.choices[0].message.content
+        
 
         # Retain po_json from previous interaction if query_called is True
         if not query_called:
@@ -1679,6 +2040,9 @@ async def chat_with_po_assistant(request: ChatRequest):
         chat_histories[user_id].append(f"Bot: {bot_reply}")
         print("PO JSON:", po_json, "User ID:", user_id)
         po_email=po_json["Email"]
+        items=po_json["Items"]
+        item_ids=[item['Item ID'] for item in items]
+        supplier_id=po_json["Supplier ID"]
         # if(po_email):
         #     po_email_cache[user_id].add(po_email)
 
@@ -1714,6 +2078,208 @@ async def chat_with_po_assistant(request: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# @app.post("/chat") # Assuming 'app' is your FastAPI app instance
+# async def chat_with_po_assistant(request: ChatRequest): # Assuming ChatRequest is defined
+#     user_id = request.user_id
+#     user_message = request.message
+
+#     # Maintain user session (assuming chat_histories, user_po_details, DEFAULT_PO_STRUCTURE are defined)
+#     if user_id not in chat_histories:
+#         chat_histories[user_id] = []
+#         user_po_details[user_id] = DEFAULT_PO_STRUCTURE.copy() # Ensure DEFAULT_PO_STRUCTURE is defined
+    
+#     chat_histories[user_id].append(f"User: {user_message}")
+#     conversation = "\n".join(chat_histories[user_id])
+
+#     try:
+#         messages = [
+#             {"role": "system", "content": template_PO}, # Ensure template_PO is defined
+#             {"role": "user", "content": conversation}
+#         ]
+
+#         # Define functions for the LLM
+#         # If the LLM should trigger validation, define parameters for details_validation
+#         functions = [
+#             {
+#                 "name": "query_database",
+#                 "description": "Retrieve data from the database using SQL queries based on a natural language question.",
+#                 "parameters": {
+#                     "type": "object",
+#                     "properties": {
+#                         "question": {
+#                             "type": "string",
+#                             "description": "Natural language question requiring database data to answer."
+#                         }
+#                     },
+#                     "required": ["question"]
+#                 }
+#             },
+#             {
+#                 "name": "details_validation", # LLM function name
+#                 "description": "Validates Supplier ID and a list of Item IDs against the database.",
+#                 "parameters": {
+#                     "type": "object",
+#                     "properties": {
+#                         "supplier_id": {
+#                             "type": "string",
+#                             "description": "The Supplier ID to validate (optional)."
+#                         },
+#                         "item_ids": {
+#                             "type": "array",
+#                             "items": {"type": "string"},
+#                             "description": "A list of Item IDs to validate (optional)."
+#                         }
+#                     },
+#                     # No 'required' fields means LLM can call it with supplier_id, item_ids, or both, or neither.
+#                     # The Python function details_validator_po handles these cases.
+#                 }
+#             }
+#         ]
+
+#         response = client.chat.completions.create( # Assuming 'client' is your OpenAI client
+#             model="gpt-4o",
+#             messages=messages,
+#             functions=functions,
+#             function_call="auto",
+#             temperature=0.7,
+#             max_tokens=500
+#         )
+
+#         response_message = response.choices[0].message
+#         bot_reply = response_message.content
+#         function_call = response_message.function_call
+#         query_called = False
+#         validation_info_for_llm = None # To store validation results if LLM calls it
+
+#         # Handle function calls from LLM
+#         if function_call:
+#             if function_call.name == "query_database":
+#                 args = json.loads(function_call.arguments)
+#                 query_result_json = query_database_function(args["question"]) # Expecting JSON string
+#                 messages.append({
+#                     "role": "function",
+#                     "name": "query_database",
+#                     "content": query_result_json # query_result must be a string
+#                 })
+#                 query_called = True
+            
+#             elif function_call.name == "details_validation":
+#                 args = json.loads(function_call.arguments)
+#                 supplier_id_to_validate = args.get("supplier_id")
+#                 item_ids_to_validate = args.get("item_ids", []) # Default to empty list
+
+#                 db_session: Session = next(get_db())
+#                 try:
+#                     validation_result = details_validator_po(db_session, supplier_id_to_validate, item_ids_to_validate)
+#                     validation_info_for_llm = json.dumps(validation_result) # For LLM context
+#                     print("LLM-triggered Validation Outcome:", validation_result)
+#                 finally:
+#                     db_session.close()
+                
+#                 messages.append({
+#                     "role": "function",
+#                     "name": "details_validation",
+#                     "content": validation_info_for_llm
+#                 })
+#                 query_called = True # Treat as a turn that needs LLM's follow-up
+
+#             # If a function was called (query_database or details_validation), get LLM's response
+#             if query_called: # Renamed from if function_call for clarity
+#                 second_response = client.chat.completions.create(
+#                     model="gpt-4o",
+#                     messages=messages,
+#                     temperature=0.7,
+#                     max_tokens=500
+#                 )
+#                 bot_reply = second_response.choices[0].message.content
+
+#         # Update po_json if no query/validation function was called by LLM in this turn
+#         # (or if you want to update it regardless, adjust this logic)
+#         if not query_called: # query_called indicates LLM interaction, po_json usually from LLM's content
+#             # Assuming categorize_po_details updates user_po_details[user_id]
+#             # Ensure categorize_po_details is an async function if awaited
+#             # user_po_details[user_id] = await categorize_po_details(bot_reply, user_id)
+#             pass # Re-evaluate this logic based on categorize_po_details behavior
+
+#         po_json = user_po_details.get(user_id, DEFAULT_PO_STRUCTURE.copy())
+#         chat_histories[user_id].append(f"Bot: {bot_reply}")
+#         print("PO JSON after LLM interaction:", po_json, "User ID:", user_id)
+
+#         # ---- Internal Validation Step (after LLM populates po_json) ----
+#         # This validation runs on the po_json potentially populated/updated by the LLM.
+#         # It's separate from the LLM-callable 'details_validation' function.
+#         internal_validation_performed = False
+#         if po_json: # Ensure po_json is not None
+#             supplier_id_from_json = po_json.get("Supplier ID")
+#             items_from_json = po_json.get("Items", [])
+#             item_ids_from_json = [item.get('Item ID') for item in items_from_json if item.get('Item ID')]
+
+#             # Perform internal validation if IDs are present and maybe if not just validated by LLM
+#             if supplier_id_from_json or item_ids_from_json:
+#                 # Avoid re-validating if LLM just did it with the same data, unless necessary
+#                 # This simple check assumes LLM call would populate validation_info_for_llm
+#                 # A more robust check might compare the IDs.
+#                 # if not (function_call and function_call.name == "details_validation"):
+#                 db_session_internal_val: Session = next(get_db())
+#                 try:
+#                     internal_validation_outcome = details_validator_po(db_session_internal_val, supplier_id_from_json, item_ids_from_json)
+#                     print("Internal Validation Outcome:", internal_validation_outcome)
+#                     internal_validation_performed = True
+#                     # You can use internal_validation_outcome to:
+#                     # 1. Modify `bot_reply` to inform the user about validation issues.
+#                     #    Example:
+#                     #    if internal_validation_outcome.get("supplier_exists") is False:
+#                     #        bot_reply += f"\nNOTICE: The Supplier ID '{supplier_id_from_json}' could not be validated."
+#                     #    if internal_validation_outcome.get("all_items_exist") is False:
+#                     #        invalid_items = [d['item_id'] for d in internal_validation_outcome.get("item_validation_details", []) if d['exists'] is False]
+#                     #        if invalid_items:
+#                     #            bot_reply += f"\nNOTICE: The following Item IDs could not be validated: {', '.join(invalid_items)}."
+#                     # 2. Adjust `submissionStatus`.
+#                     # 3. Log the information for backend processing.
+#                 finally:
+#                     db_session_internal_val.close()
+
+#         # Determine submission status (existing logic)
+#         po_email = po_json.get("Email")
+#         # Ensure po_email_cache is defined and handled correctly for the user_id
+#         # if user_id not in po_email_cache: po_email_cache[user_id] = set()
+        
+#         submissionStatus = "in_progress" # Default
+#         if "Would you like to submit" in bot_reply:
+#             submissionStatus = "pending"
+#         elif "Purchase Order created successfully" in bot_reply:
+#             submissionStatus = "submitted"
+#         elif "I want to change something" in bot_reply: # Or similar phrases indicating cancellation/changes
+#             submissionStatus = "cancelled"
+        
+#         # This po_email logic seems to override above, ensure it's the desired behavior
+#         if po_email:
+#             if po_email not in po_email_cache.get(user_id, set()): # Use .get for safety
+#                 submissionStatus = "pending"
+#             po_email_cache.setdefault(user_id, set()).add(po_email) # Ensure set exists
+        
+#         print("PO submission status:", submissionStatus)
+
+#         return_payload = {
+#             "user_id": user_id,
+#             "bot_reply": bot_reply,
+#             "chat_history": chat_histories.get(user_id), # Use .get for safety
+#             "po_json": po_json,
+#             "submissionStatus": submissionStatus,
+#             "po_email": po_email
+#         }
+#         if internal_validation_performed: # Optionally include internal validation results
+#             return_payload["internal_validation_results"] = internal_validation_outcome
+#         if validation_info_for_llm: # If LLM triggered validation
+#              return_payload["llm_validation_results"] = json.loads(validation_info_for_llm)
+
+#         return return_payload
+
+#     except Exception as e:
+#         print(f"Error in chat_with_po_assistant: {e}") # Log the error
+#         # from fastapi import HTTPException (ensure imported)
+#         raise HTTPException(status_code=500, detail=str(e))
+    
 @app.post("/adduser")
 async def add_user(request:UserSchema,db:Session=Depends(get_db)):
     user = User(name=request.name,email=request.email,nickname=request.nickname)
@@ -2071,144 +2637,227 @@ invoice_chat_histories = {}
 user_invoice_details = {}
 user_po_cache = {}
 invoice_email_cache = defaultdict(set)
+ 
 
-@app.post("/creation/response") 
-async def generate_response(request: ChatRequest):
-    user_id = request.user_id
-    user_message = request.message
+# @app.post("/creation/response_new") 
+# async def generate_response_new(request: ChatRequest):
+#     user_id = request.user_id
+#     user_message = request.message
 
-    # Maintain user session for invoice creation
-    if user_id not in invoice_chat_histories:
-        invoice_chat_histories[user_id] = []
-        user_invoice_details[user_id] = {}
-    
-    invoice_chat_histories[user_id].append(f"User: {user_message}")
-    conversation = "\n".join(invoice_chat_histories[user_id])
+#     # Maintain user session for invoice creation
+#     if user_id not in invoice_chat_histories:
+#         invoice_chat_histories[user_id] = []
+#         user_invoice_details[user_id] = {}
+#         user_po_cache[user_id] = set()  # Initialize PO cache for the user
 
-    try:
-        # Prepare messages with system template
-        messages = [
-            {"role": "system", "content": template_5},
-            {"role": "user", "content": conversation}
-        ]
+#     invoice_chat_histories[user_id].append(f"User: {user_message}")
+#     conversation = "\n".join(invoice_chat_histories[user_id])
 
-        # Define available functions
-        functions = [{
-            "name": "query_database",
-            "description": "Retrieve data from the database using SQL queries",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {
-                        "type": "string", 
-                        "description": "Natural language question requiring database data"
-                    }
-                },
-                "required": ["question"]
-            }
-        }]
+#     try:
+#         # Prepare messages with system template
+#         messages = [
+#             {"role": "system", "content": template_5_new},
+#             {"role": "user", "content": conversation}
+#         ]
 
-        # First API call with function definition
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            functions=functions,
-            function_call="auto",
-            temperature=0.7,
-            max_tokens=500
-        )
+#         # Define available functions
+#         functions = [{
+#             "name": "query_database",
+#             "description": "Retrieve data from the database using SQL queries",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                     "question": {
+#                         "type": "string", 
+#                         "description": "Natural language question requiring database data"
+#                     }
+#                 },
+#                 "required": ["question"]
+#             }
+#         },
+#         {
+#             "name": "details_validation", # LLM function name
+#             "description": "Validates Purchase Order Number and a list of Item IDs against the database.",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                     "po_number": {
+#                         "type": "string",
+#                         "description": "The Purchase Order Number to validate (optional)."
+#                     },
+#                     "item_ids": {
+#                         "type": "array",
+#                         "items": {"type": "string"},
+#                         "description": "A list of Item IDs to validate (optional)."
+#                     }
+#                 },
+#                 # No 'required' fields means LLM can call it with supplier_id, item_ids, or both, or neither.
+#                 # The Python function details_validator_po handles these cases.
+#             }
+#             }]
 
-        response_message = response.choices[0].message
-        bot_reply = response_message.content
-        function_call = response_message.function_call
-        query_called = False
+#         # First API call with function definition
+#         response = client.chat.completions.create(
+#             model="gpt-4o",
+#             messages=messages,
+#             functions=functions,
+#             function_call="auto",
+#             temperature=0.7,
+#             max_tokens=500
+#         )
 
-        # Handle function call
-        if function_call and function_call.name == "query_database":
-            args = json.loads(function_call.arguments)
-            query_result = query_database_function(args["question"])
-            query_called = True
+#         response_message = response.choices[0].message
+#         bot_reply = response_message.content
+#         function_call = response_message.function_call
+#         query_called = False
 
-            # Append function response and make second call
-            messages.append({
-                "role": "function",
-                "name": "query_database",
-                "content": query_result
-            })
+#         # Handle function call
+#         if function_call and function_call.name == "query_database":
+#             print("Function call: query database")
+#             args = json.loads(function_call.arguments)
+#             query_result = query_database_function(args["question"])
+#             query_called = True
 
-            second_response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=500
-            )
-            bot_reply = second_response.choices[0].message.content
+#             # Append function response and make second call
+#             messages.append({
+#                 "role": "function",
+#                 "name": "query_database",
+#                 "content": query_result
+#             })
+#             # Second API call with function result
+#             # second_response = client.chat.completions.create(
+#             #     model="gpt-4o",
+#             #     messages=messages,
+#             #     temperature=0.7,
+#             #     max_tokens=500
+#             # )
+#             # bot_reply = second_response.choices[0].message.content
+#         elif function_call.name == "details_validation":
+#             args = json.loads(function_call.arguments)
+#             po_number_to_validate = args.get("po_number")
+#             item_ids_to_validate = args.get("item_ids", []) # Default to empty list
 
-        # Update conversation history
-        invoice_chat_histories[user_id].append(f"Bot: {bot_reply}")
+#             db_session: Session = next(get_db())
+#             try:
+#                 validation_result = details_validator_invoice(db_session, po_number_to_validate, item_ids_to_validate)
+#                 validation_info_for_llm = json.dumps(validation_result) # For LLM context
+#                 print("LLM-triggered Validation Outcome:", validation_result)
+#             finally:
+#                 db_session.close()
+            
+#                         # Append function response to messages
+#             messages.append({
+#                 "role": "function", 
+#                 "name": "details_validation",
+#                 "content": validation_info_for_llm
+#             })
 
-        # Extract invoice details if no function was called
-        if not query_called:
-            user_invoice_details[user_id] = await categorize_invoice_details_new(bot_reply, user_id)
+#             # Second API call with function result
+#             second_response = client.chat.completions.create(
+#                 model="gpt-4o",
+#                 messages=messages,
+#                 temperature=0.7,
+#                 max_tokens=500
+#             )
+#             bot_reply = second_response.choices[0].message.content
 
-        inv_details = user_invoice_details[user_id]
-        print("invDetails",inv_details)
-        po_items=fetch_po_items(inv_details["PO Number"])
+#         # Extract invoice details if no function was called
+#         if not query_called:
+#             user_invoice_details[user_id] = await categorize_invoice_details_new(bot_reply, user_id)
 
-        # Determine submission status
-        # submissionStatus = "not submitted"
-        # if "Would you like to submit" in bot_reply:
-        #     submissionStatus = "pending"
-        # elif "Invoice created successfully" in bot_reply:
-        #     submissionStatus = "submitted"
-        # elif "I want to change something" in bot_reply:
-        #     submissionStatus = "cancelled"
-        # else:
-        #     submissionStatus = "in_progress"
-        submissionStatus = "in_progress"
-        if "Would you like to submit" in bot_reply:
-            submissionStatus = "pending"
-        elif "Purchase Order created successfully" in bot_reply:
-            submissionStatus = "submitted"
-        elif "I want to change something" in bot_reply:
-            submissionStatus = "cancelled"
-        else:
-            submissionStatus = "in_progress"  # Default state if no clear intent is detected
+#         inv_details = user_invoice_details[user_id]
+#         po_number = inv_details.get("PO Number", "")
+#         print("PO Number: ",po_number)
+#         # Fetch PO items only if PO number is not empty and not fetched before
+#         po_items = []
+#         if po_number and po_number not in user_po_cache[user_id]:
+#             print("Inside po loop")
+#             po_items = fetch_po_item_ids(po_number)
+#             if po_items:  # Only process if po_items is not empty
+#                 po_items_json = json.dumps({"po_items": po_items})
+#                 po_item_ids = [item["itemId"] for item in po_items]
+#                 po_item_ids_string = ",".join(po_item_ids)
+#                 print("po_item_ids_string: ",po_item_ids_string,"po_items",po_items )
+#                 messages.append({
+#                     "role": "user",  # Simulate user input
+#                     "content": f"Items: {po_item_ids_string}"
+#                 })
+#                 # 
+#                 # Mark this PO as processed
+#                 user_po_cache[user_id].add(po_number)
 
-        # Additional processing from original implementation
-        test_model_reply = testModel(user_message, bot_reply)
-        form_submission = test_submission(bot_reply)
+#                 # Second API call with updated template
+#                 second_response = client.chat.completions.create(
+#                     model="gpt-4o",
+#                     messages=messages,
+#                     temperature=0.7,
+#                     max_tokens=500
+#                 )
+#                 bot_reply = second_response.choices[0].message.content
+#                 # if not query_called and "Total Amount" in bot_reply or "Email" in bot_reply:
+#                 #     user_invoice_details[user_id] = await categorize_invoice_details_new(bot_reply, user_id)
+#                 # inv_details = user_invoice_details[user_id]
+
+#         # Update conversation history
+#         invoice_chat_histories[user_id].append(f"Bot: {bot_reply}")
+#         invoice_email=inv_details["Email"]
+
+#         # Determine submission status from bot_reply
+#         # submissionStatus = "not submitted"
+#         # if "Would you like to submit" in bot_reply:
+#         #     submissionStatus = "pending"
+#         # elif "Invoice created successfully" in bot_reply:
+#         #     submissionStatus = "submitted"
+#         # elif "I want to change something" in bot_reply:
+#         #     submissionStatus = "cancelled"
+#         # else:
+#         #     submissionStatus = "in_progress"
+
+#         # Additional processing from original implementation
+#         test_model_reply = testModel(user_message, bot_reply)
+#         form_submission = test_submission(bot_reply)
+#         # if invoice_email and invoice_email not in invoice_email_cache[user_id]:
+#         #     form_submission = "pending"
         
-        # Determine action type
-        action = 'action'
-        past_pattern = re.compile(r"(past\s+invoice|invoice\s+past|last\s+invoice)", re.IGNORECASE)
-        create_pattern = re.compile(r"(create\s+invoice|invoice\s+create)", re.IGNORECASE)
+#         # if invoice_email:
+#         #     invoice_email_cache[user_id].add(invoice_email)
+#         if invoice_email:
+#         # only if we’ve never seen it before do we override
+#             if invoice_email not in invoice_email_cache[user_id]:
+#                 form_submission = "pending"
+#             invoice_email_cache[user_id].add(invoice_email)
         
-        for line in invoice_chat_histories[user_id]:
-            if line.startswith("User:"):
-                user_input = line.split(":")[1].strip()
-                if past_pattern.search(user_input):
-                    action = "last invoice created"
-                elif create_pattern.search(user_input):
-                    action = "create invoice"
-                elif "create po" in user_input.lower():
-                    action = "create PO"
-        return {
-            "user_id": user_id,
-            "bot_reply": bot_reply,
-            "chat_history": invoice_chat_histories[user_id],
-            "conversation": invoice_chat_histories[user_id],
-            "invoice_json": inv_details,
-            "action": action,
-            # "submissionStatus":form_submission,
-            "po_items":po_items,
-            "submissionStatus": submissionStatus,
-            "test_model_reply": test_model_reply,
-            "invoiceDatafromConversation":inv_details,
-        }
+#         # Determine action type
+#         action = 'action'
+#         past_pattern = re.compile(r"(past\s+invoice|invoice\s+past|last\s+invoice)", re.IGNORECASE)
+#         create_pattern = re.compile(r"(create\s+invoice|invoice\s+create)", re.IGNORECASE)
+        
+#         for line in invoice_chat_histories[user_id]:
+#             if line.startswith("User:"):
+#                 user_input = line.split(":", 1)[1].strip()
+#                 if past_pattern.search(user_input):
+#                     action = "last invoice created"
+#                 elif create_pattern.search(user_input):
+#                     action = "create invoice"
+#                 elif "create po" in user_input.lower():
+#                     action = "create PO"
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+#         return {
+#             "user_id": user_id,
+#             "bot_reply": bot_reply,
+#             "chat_history": invoice_chat_histories[user_id],
+#             "conversation": invoice_chat_histories[user_id],
+#             "invoice_json": inv_details,
+#             "action": action,
+#             "submissionStatus": form_submission,
+#             "po_items": po_items,  # Appended PO items if fetched
+#             "test_model_reply": test_model_reply,
+#             "invoiceDatafromConversation": inv_details,
+#             "invoice_email":invoice_email
+#         }
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/creation/response_new") 
 async def generate_response_new(request: ChatRequest):
@@ -2275,12 +2924,46 @@ async def generate_response_new(request: ChatRequest):
                 "name": "query_database",
                 "content": query_result
             })
+            # Second API call with function result
+            # second_response = client.chat.completions.create(
+            #     model="gpt-4o",
+            #     messages=messages,
+            #     temperature=0.7,
+            #     max_tokens=500
+            # )
+            # bot_reply = second_response.choices[0].message.content
 
         # Extract invoice details if no function was called
         if not query_called:
             user_invoice_details[user_id] = await categorize_invoice_details_new(bot_reply, user_id)
 
         inv_details = user_invoice_details[user_id]
+        raw_items = inv_details.get("Items","")            # e.g. [{"Item ID": "ID123", …}, …]
+        print("Fetched ids: ",raw_items)
+        item_ids = [item['Item ID'] for item in raw_items]
+# Print the new list of item IDs
+        print("Item IDs: ", item_ids)
+        if(item_ids):
+                try:
+                    db_session: Session = next(get_db())
+                    item_validation=details_validator_invoice(db_session,item_ids)
+                    print("Item validations: ",item_validation)
+                    second_response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=messages,
+                        temperature=0.7,
+                        max_tokens=500
+                    )
+                    messages.append({
+                        "role": "user",  # Simulate user input
+                        "content": f"Item Validations: {item_validation}"
+                    })
+                    bot_reply = second_response.choices[0].message.content
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=str(e))
+                finally:
+                    db_session.close()
+
         po_number = inv_details.get("PO Number", "")
         print("PO Number: ",po_number)
         # Fetch PO items only if PO number is not empty and not fetched before
@@ -2316,19 +2999,6 @@ async def generate_response_new(request: ChatRequest):
         # Update conversation history
         invoice_chat_histories[user_id].append(f"Bot: {bot_reply}")
         invoice_email=inv_details["Email"]
-
-        # Determine submission status from bot_reply
-        # submissionStatus = "not submitted"
-        # if "Would you like to submit" in bot_reply:
-        #     submissionStatus = "pending"
-        # elif "Invoice created successfully" in bot_reply:
-        #     submissionStatus = "submitted"
-        # elif "I want to change something" in bot_reply:
-        #     submissionStatus = "cancelled"
-        # else:
-        #     submissionStatus = "in_progress"
-
-        # Additional processing from original implementation
         test_model_reply = testModel(user_message, bot_reply)
         form_submission = test_submission(bot_reply)
         # if invoice_email and invoice_email not in invoice_email_cache[user_id]:
@@ -2374,220 +3044,3 @@ async def generate_response_new(request: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# @app.post("/creation/response")
-# async def generate_response(query:str):
-#     conversation.append('User: ' + query)
-#     output = gpt_response(query)
-#     conversation.append('Bot: ' + output)
-#     test_model_reply=testModel(query,output)
-#     form_submission=test_submission(output)
-#     action='action'
-#     submissionStatus="not submitted"
-#     past_invoice_regex = r"(past\s+invoice|invoice\s+past|last\s+invoice|invoice\s+last|previous\s+invoice|invoice\s+previous)\s*"
-#     invoice_regex = r"(create\s+invoice|invoice\s+create|create\san\sinvoice)\s*"
-#     patternInvoice = re.compile(invoice_regex, re.IGNORECASE)
-#     pastPatternInvoice = re.compile(past_invoice_regex, re.IGNORECASE)
-#     for line in conversation:
-#         if line.startswith("User:"):
-#             user_input = line.split(":")[1].strip().lower()
-#             if re.search(pastPatternInvoice, user_input):
-#                 action = "last invoice created"
-#                 # break
-#             elif re.search(patternInvoice, user_input):
-#                 action = "create invoice"
-#             elif "create po" in user_input:
-#                 action = "create PO"
-
-#     invoiceDatafromConversation=collect_invoice_data(conversation)
-#     invDetails=await categorize_invoice_details_new(conversation,"admin")
-#     print("invDetails",invDetails)
-#     return {"conversation":conversation,"invoice_json":invDetails,"action":action,
-#     "submissionStatus":form_submission,"invoiceDatafromConversation":invDetails,
-#     "test_model_reply":test_model_reply }
-   
-
-
-# @app.post("/creation/response") 
-# async def generate_response(request: ChatRequest):
-#     user_id = request.user_id
-#     user_message = request.message
-#     po_validated = False
-    
-#     # Maintain user session for invoice creation
-#     if user_id not in invoice_chat_histories:
-#         invoice_chat_histories[user_id] = []
-#         user_invoice_details[user_id] = {'po_validated': False, 'po_data': {}}
-    
-#     invoice_chat_histories[user_id].append(f"User: {user_message}")
-#     conversation = "\n".join(invoice_chat_histories[user_id])
-
-#     try:
-#         # Enhanced system prompt with PO validation emphasis
-#         messages = [
-#             {"role": "system", "content": f"{template_5}\nFIRST PRIORITY: Always check for and validate PO numbers if mentioned."},
-#             {"role": "user", "content": conversation}
-#         ]
-
-#         # Define prioritized functions
-#         functions = [
-#             {
-#                 "name": "validate_po",
-#                 "description": "MUST CALL THIS FIRST if user mentions a PO number. Validates PO and retrieves items.",
-#                 "parameters": {
-#                     "type": "object",
-#                     "properties": {
-#                         "po_number": {
-#                             "type": "string",
-#                             "description": "Exact PO number from user message (e.g. PO123, purchase order 456)"
-#                         }
-#                     },
-#                     "required": ["po_number"]
-#                 }
-#             },
-#             {
-#                 "name": "query_database",
-#                 "description": "For general database queries not related to PO validation",
-#                 "parameters": {
-#                     "type": "object",
-#                     "properties": {
-#                         "question": {
-#                             "type": "string", 
-#                             "description": "Natural language question requiring database data"
-#                         }
-#                     },
-#                     "required": ["question"]
-#                 }
-#             }
-#         ]
-
-#         # First try to force PO validation
-#         response = client.chat.completions.create(
-#             model="gpt-4o",
-#             messages=messages,
-#             functions=functions,
-#             function_call={"name": "validate_po"},
-#             temperature=0.7,
-#             max_tokens=500
-#         )
-
-#         response_message = response.choices[0].message
-#         function_call = response_message.function_call
-
-#         # Fallback to auto if no PO detected
-#         if not function_call:
-#             response = client.chat.completions.create(
-#                 model="gpt-4o",
-#                 messages=messages,
-#                 functions=functions,
-#                 function_call="auto",
-#                 temperature=0.7,
-#                 max_tokens=500
-#             )
-#             response_message = response.choices[0].message
-
-#         bot_reply = response_message.content
-#         function_call = response_message.function_call
-#         query_called = False
-
-#         # Handle PO validation first
-#         if function_call and function_call.name == "validate_po":
-#             args = json.loads(function_call.arguments)
-#             po_number = args["po_number"]
-            
-#             # Fetch and store PO items
-#             items = fetch_po_items(po_number)
-#             user_invoice_details[user_id]['po_data'] = {
-#                 'po_number': po_number,
-#                 'items': items,
-#                 'validated_at': datetime.now().isoformat()
-#             }
-#             user_invoice_details[user_id]['po_validated'] = True
-#             po_validated = True
-
-#             # Build validation response
-#             content = json.dumps({
-#                 "status": "validated",
-#                 "po_number": po_number,
-#                 "item_count": len(items),
-#                 "items_sample": items[:3] if len(items) > 3 else items
-#             }, default=str)
-
-#             messages.append({
-#                 "role": "function",
-#                 "name": "validate_po",
-#                 "content": content
-#             })
-
-#             # Generate final response with PO context
-#             second_response = client.chat.completions.create(
-#                 model="gpt-4o",
-#                 messages=messages,
-#                 temperature=0.7,
-#                 max_tokens=500
-#             )
-#             bot_reply = second_response.choices[0].message.content
-
-#         elif function_call and function_call.name == "query_database":
-#             args = json.loads(function_call.arguments)
-#             query_result = query_database_function(args["question"])
-#             query_called = True
-
-#             messages.append({
-#                 "role": "function",
-#                 "name": "query_database",
-#                 "content": query_result
-#             })
-
-#             second_response = client.chat.completions.create(
-#                 model="gpt-4o",
-#                 messages=messages,
-#                 temperature=0.7,
-#                 max_tokens=500
-#             )
-#             bot_reply = second_response.choices[0].message.content
-
-#         # Update conversation history
-#         invoice_chat_histories[user_id].append(f"Bot: {bot_reply}")
-
-#         # Only extract details if no PO validation occurred
-#         if not po_validated and not query_called:
-#             user_invoice_details[user_id] = await categorize_invoice_details_new(bot_reply, user_id)
-
-#         # Merge PO data with invoice details
-#         if po_validated:
-#             user_invoice_details[user_id].setdefault('invoice_data', {})
-#             user_invoice_details[user_id]['invoice_data'].update({
-#                 'po_number': user_invoice_details[user_id]['po_data']['po_number'],
-#                 'po_items': user_invoice_details[user_id]['po_data']['items']
-#             })
-
-#         # Ensure final validated status
-#         po_validated = user_invoice_details[user_id].get('po_validated', False)
-
-#         # Determine submission status
-#         submission_status = "in_progress"
-#         if "Would you like to submit" in bot_reply:
-#             submission_status = "pending"
-#         elif "Invoice created successfully" in bot_reply:
-#             submission_status = "submitted"
-#         elif "I want to change something" in bot_reply:
-#             submission_status = "cancelled"
-
-#         # Action detection
-#         action = 'create invoice' if 'create invoice' in user_message.lower() else 'other'
-        
-#         return {
-#             "user_id": user_id,
-#             "bot_reply": bot_reply,
-#             "chat_history": invoice_chat_histories[user_id],
-#             "invoice_json": user_invoice_details[user_id].get('invoice_data', {}),
-#             "action": action,
-#             "submissionStatus": submission_status,
-#             "test_model_reply": testModel(user_message, bot_reply),
-#             "invoiceDatafromConversation": user_invoice_details[user_id],
-#             "po_validated": po_validated,
-#             "validated_po": user_invoice_details[user_id].get('po_data', {})
-#         }
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
