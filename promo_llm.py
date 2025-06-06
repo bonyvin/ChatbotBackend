@@ -3,12 +3,12 @@ import os
 import uuid
 import json
 import traceback # For detailed error logging
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Annotated, Sequence, AsyncIterator
+from typing import Dict, List, Optional, TypedDict, Annotated, Sequence, AsyncIterator
 
 import operator
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse # Import StreamingResponse
-from pydantic import AliasChoices, BaseModel, EmailStr, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field
 from dotenv import load_dotenv
 from sqlalchemy import text
 from requests import Session # Assuming Session is used within get_db
@@ -23,14 +23,12 @@ from langchain_core.messages import (
     AIMessage,
     ToolMessage,
     BaseMessage,
-    AIMessageChunk,
-    FunctionMessage # Import AIMessageChunk for type checking stream
+    AIMessageChunk, # Import AIMessageChunk for type checking stream
 )
-from langchain_core.tools import Tool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
-from llm_templates import template_Invoice_without_date,po_database_schema,po_extraction_prompt,invoice_extraction_prompt
+from llm_templates import template_Promotion_without_date
 # from promoUtils import template_Promotion_without_date
 
 # Assuming database.py and llm_templates.py are in the same directory or accessible
@@ -89,9 +87,11 @@ except ImportError:
         yield MockSession()
         print("Mock database session closed.")
 
+
 # --- Configuration ---
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 if not OPENAI_API_KEY:
     OPENAI_API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual key if needed
     if OPENAI_API_KEY == "YOUR_API_KEY_HERE":
@@ -99,50 +99,85 @@ if not OPENAI_API_KEY:
 
 print(f"LangSmith tracing enabled: {os.getenv('LANGCHAIN_TRACING_V2') == 'true'}")
 print(f"LangSmith project: {os.getenv('LANGCHAIN_PROJECT')}")
-# Using Literal for simplicity as there are a fixed set of strings
-InvoiceType = Literal["Merchandise", "Non - Merchandise", "Debit Note", "Credit Note"]
-class ExtractedField(BaseModel):
-    value: Optional[Any] = None
-    is_example: bool = False
-class ExtractedInvoiceItem(BaseModel):
-    item_id: Optional[ExtractedField] = None
-    quantity: Optional[ExtractedField] = None
-    invoice_cost: Optional[ExtractedField] = None
-class ExtractedInvoiceDetails(BaseModel):
-    po_number: Optional[ExtractedField] = None
-    invoice_number: Optional[ExtractedField] = None
-    invoice_type: Optional[ExtractedField] = None
-    date: Optional[ExtractedField] = None
-    total_amount: Optional[ExtractedField] = None
-    total_tax: Optional[ExtractedField] = None
-    items: Optional[List[ExtractedInvoiceItem]] = None
-    supplier_id: Optional[ExtractedField] = None
-    email: Optional[ExtractedField] = None
-class PoIdDetection(BaseModel):
-    """
-    Structured output for detecting a Purchase Order ID in text.
-    """
-    po_id_found: bool = Field(False, description="True if a Purchase Order ID was detected in the text.")
-    extracted_po_id: Optional[str] = Field(None, description="The extracted Purchase Order ID, if found.")
-# Initialize LLMs
+
+# --- Tool Definition / Pydantic Models ---
+class ExtractedPromotionDetails(BaseModel):
+    # Use validation_alias and AliasChoices for more flexible field naming in LLM output
+    promotion_type: str | None = Field(None, validation_alias=AliasChoices('Promotion Type', 'promotion_type'))
+    hierarchy_type: str | None = Field(None, validation_alias=AliasChoices('Hierarchy Type', 'hierarchy_type'))
+    hierarchy_value: str | None = Field(None, validation_alias=AliasChoices('Hierarchy Value', 'hierarchy_value'))
+    brand: str | None = Field(None, validation_alias=AliasChoices('Brand', 'brand'))
+    items: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Items', 'items'))
+    excluded_items: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Excluded Items', 'excluded_items'))
+    discount_type: str | None = Field(None, validation_alias=AliasChoices('Discount Type', 'discount_type'))
+    discount_value: str | None = Field(None, validation_alias=AliasChoices('Discount Value', 'discount_value')) # Keep as str to handle % vs fixed ambiguity
+    start_date: str | None = Field(None, validation_alias=AliasChoices('Start Date', 'start_date'))
+    end_date: str | None = Field(None, validation_alias=AliasChoices('End Date', 'end_date'))
+    stores: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Stores', 'stores'))
+    excluded_stores: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Excluded Stores', 'excluded_stores'))
+
+    class Config:
+        populate_by_name = True # Allows using field names as well as aliases
+        extra = 'ignore' # Ignore extra fields the LLM might hallucinate
+
+
 chat_model = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, streaming=True, temperature=0.7)
+
 # LLM for SQL generation (non-streaming, deterministic)
 sql_generator_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0)
+
 # LLM for detail extraction (non-streaming)
 extractor_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0)
 extractor_llm_structured = extractor_llm.with_structured_output(
-    ExtractedInvoiceDetails,
+    ExtractedPromotionDetails,
     method="function_calling", # Or "json_mode"
-    include_raw=False)
-# LLM for PO ID detection (new)
-po_detector_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0).with_structured_output(
-    PoIdDetection,
-    method="function_calling",
     include_raw=False
 )
+
+# --- Database Schema and Helper Functions ---
+TABLE_SCHEMA = """
+Database Schema:
+
+1. `itemmaster` (Alias: im) (Base Table for Item Details):
+   - `itemId` (VARCHAR/INT): Unique identifier for each item. (Primary Key)
+   - `itemDescription` (VARCHAR): Primary description of the item.
+   - `itemSecondaryDescription` (VARCHAR): Additional details about the item.
+   - `itemDepartment` (VARCHAR): Broader category (e.g., T-Shirt, Trousers, Jackets). Use LIKE 'value%' for filtering.
+   - `itemClass` (VARCHAR): Classification within a department (e.g., Formals, Casuals, Leather). Use LIKE 'value%' for filtering.
+   - `itemSubClass` (VARCHAR): Granular classification (e.g., Full Sleeve, Half Sleeve, Zipper, Regular Fit). Use LIKE 'value%' for filtering.
+   - `brand` (VARCHAR): Brand associated with the item (e.g., Zara, Adidas, H&M). Use = 'value' for filtering.
+   - `diffType1` (INT): Foreign key linking to `itemdiffs.id` (e.g., for color).
+   - `diffType2` (INT): Foreign key linking to `itemdiffs.id` (e.g., for size).
+   - `diffType3` (INT): Foreign key linking to `itemdiffs.id` (e.g., for material).
+
+2. `itemsupplier` (Alias: isup) (For Cost & Supplier Data):
+   - `id` (INT): Unique identifier for this relationship. (Primary Key)
+   - `supplierCost` (DECIMAL/FLOAT): Cost of the item from the supplier.
+   - `supplierId` (VARCHAR/INT): Identifier for the supplier.
+   - `itemId` (VARCHAR/INT): Foreign key linking to `itemmaster.itemId`.
+
+3. `itemdiffs` (Alias: idf) (For Attribute Filtering - Differentiation Types):
+   - `id` (INT): Unique identifier for each differentiation attribute. (Primary Key)
+   - `diffType` (VARCHAR): The attribute type (e.g., 'color', 'size', 'material'). Often used with diffId.
+   - `diffId` (VARCHAR): The actual differentiation value (e.g., 'Red', 'XL', 'Cotton'). Use = 'value' for filtering.
+
+4. `storedetails` (Alias: sd) (For Store Information):
+   - `storeId` (INT): Unique identifier for each store. (Primary Key)
+   - `storeName` (VARCHAR): Name of the store.
+   - `address` (VARCHAR): Street address.
+   - `city` (VARCHAR): City.
+   - `state` (VARCHAR): State.
+   - `zipCode` (VARCHAR): ZIP code.
+   - `phone` (VARCHAR): Contact phone number.
+
+Relationships:
+- `itemmaster.itemId` links to `itemsupplier.itemId`. JOIN using `ON im.itemId = isup.itemId`.
+- `itemmaster.diffType1`, `itemmaster.diffType2`, `itemmaster.diffType3` link to `itemdiffs.id`.
+"""
+
+# Memoized table names to avoid repeated DB calls
 _table_names_cache = None
-today = datetime.datetime.now().strftime("%d/%m/%Y")
-system_prompt_content = template_Invoice_without_date.replace("{current_date}", today)
+
 def get_table_names():
     """Fetch all table names from the database, with caching."""
     global _table_names_cache
@@ -162,16 +197,17 @@ def get_table_names():
     except Exception as e:
         print(f"Error fetching table names: {e}")
         return [] # Return empty list on error
+    # No finally db.close() needed with context manager
+
 # --- Graph State Definition ---
 class GraphState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], operator.add]
-    user_query: str | None
-    generated_sql: Optional[str]
-    sql_results: Optional[List[Dict] | str]
-    llm_response_content: Optional[str]
-    extracted_details: Optional[ExtractedInvoiceDetails]
-    last_po_id: Optional[str]       # ← we store the last‐used PO here
-    candidate_po_id: Optional[str]  # ← this will be set by detect_po
+    messages: Annotated[Sequence[BaseMessage], operator.add] # Conversation history
+    user_query: str | None # Most recent user query
+    generated_sql: Optional[str] # SQL generated by the LLM
+    sql_results: Optional[List[Dict] | str] # Results from DB execution or error string
+    llm_response_content: Optional[str] # Content from the main LLM response node (to be streamed)
+    extracted_details: Optional[ExtractedPromotionDetails] # Details extracted from LLM response
+
 # --- Graph Nodes ---
 async def preprocess_input(state: GraphState) -> Dict:
     """Adds the latest user message to the state and history."""
@@ -182,6 +218,7 @@ async def preprocess_input(state: GraphState) -> Dict:
     user_query = last_message.content
     print(f"User Query: {user_query}")
     return {"user_query": user_query}
+
 async def generate_sql(state: GraphState) -> Dict:
     """
     Node to attempt generating SQL from the user query.
@@ -193,30 +230,97 @@ async def generate_sql(state: GraphState) -> Dict:
     if not user_query:
         print("--- No user query found. Skipping SQL generation. ---")
         return {"generated_sql": None}
+
     # Updated prompt for SQL generation
     # Added emphasis on balanced parentheses in rule 7
     sql_generation_prompt = ChatPromptTemplate.from_messages([
-        (po_database_schema),
+        ("system", f"""You are an expert SQL generator. Your task is to convert the user's natural language question into a valid SQL SELECT statement based ONLY on the database schema and rules provided below.
+
+Database Schema:
+{TABLE_SCHEMA}
+
+Core Task: Generate a SQL SELECT statement to retrieve `itemmaster.itemId` (and potentially other requested columns like `supplierCost`) based on the user's filtering criteria.
+
+Rules & Instructions:
+1.  **Focus on Selection Criteria:** Analyze the user's request and extract ONLY the criteria relevant for selecting items (e.g., brand, color, size, department, class, subclass, supplier cost).
+2.  **Ignore Irrelevant Information:** Completely IGNORE any information not directly related to filtering or selecting items based on the schema. This includes discounts, promotion details, validity dates, action verbs like "Create", "Offer", "Update", store IDs (unless specifically asked to filter by store details from `storedetails`). Your output MUST be a SELECT query, nothing else.
+3.  **SELECT Clause:** Primarily select `im.itemId`. If supplier cost is mentioned or requested, also select `isup.supplierCost`. If other specific columns are requested, include them using the appropriate aliases (im, isup, idf, sd). Use `DISTINCT` if joins might produce duplicate `itemId`s based on the query structure.
+4.  **FROM Clause:** Start with `FROM itemmaster im`.
+5.  **JOIN Clauses:**
+    * If filtering by `supplierCost` or selecting it, `JOIN itemsupplier isup ON im.itemId = isup.itemId`.
+    * Filtering by attributes (color, size, material, etc. stored in `itemdiffs`) requires checking `diffType1`, `diffType2`, `diffType3`. Use the `EXISTS` method for this. See Example 1 below.
+    * If filtering by store details, `JOIN storedetails sd ON ...` (Note: There's no direct link given between itemmaster/itemsupplier and storedetails in the schema, assume filtering by store details applies elsewhere or cannot be done with this schema unless a link is implied or added).
+6.  **WHERE Clause Construction:**
+    * **Attributes (`itemdiffs`):** To filter by an attribute like 'Red' or 'Large', use `EXISTS` subqueries checking `itemdiffs` linked via `diffType1`, `diffType2`, or `diffType3`. Example: `WHERE EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red')`.
+    * **Direct `itemmaster` Fields:**
+        * Use `im.brand = 'Value'` for exact brand matches.
+        * Use `im.itemDepartment LIKE 'Value%'` for department matches.
+        * Use `im.itemClass LIKE 'Value%'` for class matches.
+        * Use `im.itemSubClass LIKE 'Value%'` for subclass matches.
+    * **`itemsupplier` Fields:** Use `isup.supplierCost < Value`, `isup.supplierCost > Value`, etc.
+    * **Multiple Values (Same Field):** Use `OR` (e.g., `im.brand = 'Zara' OR im.brand = 'Adidas'`). Consider using `IN` for longer lists (e.g., `im.brand IN ('Zara', 'Adidas')`).
+    * **Multiple Conditions (Different Fields):** Use `AND` (e.g., `im.itemDepartment LIKE 'T-Shirt%' AND im.brand = 'Zara'`). When combining multiple `EXISTS` clauses with `OR`, group them using parentheses: `AND (EXISTS(...) OR EXISTS(...))`.
+7.  **Output Format:** Generate ONLY the SQL SELECT statement. No explanations, no comments, no markdown backticks (```sql ... ```), no trailing semicolon. Ensure all parentheses are correctly balanced, especially when using `AND (...)` for grouping `EXISTS` clauses.
+8.  **Invalid Queries:** If the user's query asks for something impossible with the schema (e.g., filtering items by store without a link, asking for non-SELECT operations), respond with "Query cannot be answered with the provided schema."
+
+Examples (Study these carefully):
+
+Example 1: Select all red colored items
+User Query: "Select all red colored items"
+SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red')
+
+Example 2: Select all red colored items with a supplier cost below $50
+User Query: "Select all red colored items with a supplier cost below $50"
+SQL: SELECT DISTINCT im.itemId, isup.supplierCost FROM itemmaster im JOIN itemsupplier isup ON im.itemId = isup.itemId WHERE isup.supplierCost < 50 AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red'))
+
+Example 3: Select all items from FashionX and Zara brands
+User Query: "Select all items from FashionX and Zara brands"
+SQL: SELECT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' OR im.brand = 'Zara'
+
+Example 4: Select all items from T-Shirt department and Casuals class
+User Query: "Select all items from T-Shirt department and Casuals class"
+SQL: SELECT im.itemId FROM itemmaster im WHERE im.itemDepartment LIKE 'T-Shirt%' AND im.itemClass LIKE 'Casuals%'
+
+Example 5: Complex request with irrelevant info
+User Query: "Create a simple promotion offering 30% off all yellow items from the FashionX Brand in the T-Shirt Department, valid from 17/04/2025 until the end of May 2025."
+SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' AND im.itemDepartment LIKE 'T-Shirt%' AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Yellow'))
+"""),
         ("human", "Convert this question to a SQL SELECT query:\n\n```text\n{user_query}\n```")
     ])
+
+    # Create the generation chain (Prompt -> LLM -> String Output)
     sql_generation_chain = sql_generation_prompt | sql_generator_llm | StrOutputParser()
+
     generated_sql = None # Default to None
     try:
+        # Limit input text length (optional)
         max_len = 2000
         truncated_query = user_query[:max_len] + ("..." if len(user_query) > max_len else "")
+
         print(f"--- Generating SQL for: '{truncated_query}' ---")
         llm_output = await sql_generation_chain.ainvoke({"user_query": truncated_query})
+
+        # Basic validation and cleaning
         cleaned_sql = llm_output.strip().strip(';').strip()
+
+        # *** START FIX: Add missing closing parenthesis for EXISTS groups ***
+        # Check if the query uses the specific pattern ' AND (EXISTS ...' and lacks the closing parenthesis
+        # Use case-insensitive check for robustness
         pattern_start_exists = " AND (EXISTS ("
         if pattern_start_exists.lower() in cleaned_sql.lower() and not cleaned_sql.endswith(")"):
+             # Check if the number of opening parentheses is one more than closing ones
+             # This is a slightly more robust check than just checking the end
              if cleaned_sql.count("(") == cleaned_sql.count(")") + 1:
                  print("--- Post-processing: Adding missing closing parenthesis for EXISTS group. ---")
                  cleaned_sql += ")"
+        # *** END FIX ***
+
         if not cleaned_sql:
             print("--- Generation failed: LLM returned empty string. ---")
         elif "cannot be answered" in cleaned_sql.lower():
             print(f"--- LLM indicated query cannot be answered: {cleaned_sql} ---")
         elif cleaned_sql.lower().startswith("select"):
+            # Further check for potentially harmful keywords (basic protection)
             harmful_keywords = ['update ', 'insert ', 'delete ', 'drop ', 'alter ', 'truncate ']
             if any(keyword in cleaned_sql.lower() for keyword in harmful_keywords):
                 print(f"--- Generation failed: Potentially harmful non-SELECT keyword detected: {cleaned_sql} ---")
@@ -225,9 +329,12 @@ async def generate_sql(state: GraphState) -> Dict:
                 generated_sql = cleaned_sql # Assign the potentially fixed SQL
         else:
             print(f"--- Generation failed: Output does not start with SELECT: {cleaned_sql} ---")
+
     except Exception as e:
         print(f"!!! ERROR during SQL generation: {e} !!!")
         traceback.print_exc()
+        # Keep generated_sql as None
+
     return {"generated_sql": generated_sql}
 
 async def execute_sql(state: GraphState) -> Dict:
@@ -237,37 +344,54 @@ async def execute_sql(state: GraphState) -> Dict:
     print("--- Node: execute_sql ---")
     query = state.get("generated_sql")
     sql_results: Optional[List[Dict] | str] = None # Default
+
     if not query:
         print("--- No SQL query to execute. ---")
         sql_results = "Error: No SQL query was generated."
+        return {"sql_results": sql_results}
+
+    # --- Validation before execution ---
+    # Basic validation: Check if it's a SELECT query
     if not query.strip().lower().startswith("select"):
         error_msg = "Error: Only SELECT queries are allowed."
         print(f"--- Validation Failed: {error_msg} ---")
         return {"sql_results": error_msg}
+
+    # Table Name Validation
     words = query.upper().split()
     valid_tables = get_table_names() # Uses cached names after first call
     if not valid_tables:
         error_msg = "Error: Could not retrieve table names for validation."
         print(f"--- Validation Failed: {error_msg} ---")
         return {"sql_results": error_msg}
+
     table_found = False
+    # Simple check: look for table names directly after FROM or JOIN
     try:
         from_indices = [i for i, word in enumerate(words) if word == "FROM"]
         join_indices = [i for i, word in enumerate(words) if word == "JOIN"]
         potential_table_indices = [idx + 1 for idx in from_indices + join_indices if idx + 1 < len(words)]
+
         for idx in potential_table_indices:
             potential_table = words[idx].strip("`;,()")
+            # Check against known tables (case-insensitive)
             if potential_table.lower() in [t.lower() for t in valid_tables]:
                 table_found = True
                 break # Found at least one valid table reference
     except Exception as parse_err:
          print(f"Warning: Error during simple table name parsing: {parse_err}")
+         # Decide if you want to proceed without validation or fail
+         # For now, let's proceed with a warning if parsing fails but allow execution
          print(f"Warning: Proceeding with query execution despite table parsing issue: {query}")
          table_found = True # Allow execution if parsing fails, adjust if stricter validation needed
+
     if not table_found:
         error_msg = f"Error: Could not validate table name in query. Ensure it uses valid tables: {valid_tables}"
         print(f"--- Validation Failed: {error_msg} ---")
         return {"sql_results": error_msg}
+    # --- End Validation ---
+
+    # --- Execution ---
     try:
         print(f"--- Executing SQL Query: {query} ---")
         with next(get_db()) as db: # Use context manager
@@ -275,11 +399,13 @@ async def execute_sql(state: GraphState) -> Dict:
             print(f"--- Query Execution Successful: Fetched {len(result)} rows ---")
             # Convert rows to list of dicts
             sql_results = [dict(row._mapping) for row in result]
+
     except Exception as e:
         error_msg = f"Error executing SQL query: {e}"
         print(f"!!! {error_msg} !!!")
         traceback.print_exc()
         sql_results = error_msg # Return the error message string
+
     return {"sql_results": sql_results}
 
 async def generate_response_from_sql(state: 'GraphState') -> Dict:
@@ -293,44 +419,70 @@ async def generate_response_from_sql(state: 'GraphState') -> Dict:
     sql_results = state.get("sql_results")
     generated_sql = state.get("generated_sql")
     messages = state.get("messages", []) # Get history for context
+
+    # Prepare context for the LLM
     context = f"The user asked: '{user_query}'\n"
+    # context += f"I generated the following SQL query to find relevant data: \n```sql\n{generated_sql}\n```\n"
     llm_instruction = "" # Initialize instruction
+
     if isinstance(sql_results, str): # Error occurred during execution
         context += f"However, there was an error executing the query: {sql_results}\n"
+        # context += "Please inform the user about the error and ask if they want to rephrase their request." # Removed redundant instruction
         llm_instruction = "Explain the database query error to the user based on the context."
     elif isinstance(sql_results, list):
         if not sql_results:
             context += "The query executed successfully but returned no results.\n"
+            # context += "Please inform the user that no items matched their criteria." # Removed redundant instruction
             llm_instruction = "Inform the user that the database query found no matching items based on the context."
         else:
+            # Limit the number of results shown to the LLM to avoid large context
             max_results_to_show = 10
+            # Ensure results are serializable before json.dumps
             serializable_results = []
             for row in sql_results[:max_results_to_show]:
                  try:
+                     # Attempt to convert row to dict if needed (adjust based on actual row type)
                      serializable_row = dict(row) if not isinstance(row, dict) else row
                      # Further check/convert types within the row if necessary
                      serializable_results.append(serializable_row)
                  except TypeError:
                      print(f"Warning: Could not serialize row for LLM context: {row}")
                      serializable_results.append({"error": "Could not display row data"})
+
+
             results_summary = json.dumps(serializable_results, indent=2)
             if len(sql_results) > max_results_to_show:
                 results_summary += f"\n... (and {len(sql_results) - max_results_to_show} more rows)"
+
+            # context += f"The query returned the following results (showing up to {max_results_to_show}):\n```json\n{results_summary}\n```\n"
+            # context += f"Please summarize these findings for the user in a clear and concise way. Mention that you looked this up in the database. Total items found: {len(sql_results)}."
+            # llm_instruction = "Summarize the database query results for the user based on the context."
             context += f"The query returned the following results (showing up to {max_results_to_show}):\n```json\n{results_summary}\n```\n"
             context += f"Total items found: {len(sql_results)}."
             print("Stream Context Results Summary: ",results_summary,"SQL Results",sql_results,"Max Rsults: ",max_results_to_show,"Messages: ",messages)
     else:
          context += "There was an issue processing the SQL results (unexpected type).\n"
+         # context += "Please apologize to the user and mention a technical difficulty." # Removed redundant instruction
          llm_instruction = "Apologize for a technical difficulty processing database results based on the context."
+
+
+    # Define the prompt for summarizing SQL results
     today = datetime.datetime.now().strftime("%d/%m/%Y")
-    system_prompt_content = template_Invoice_without_date.replace("{current_date}", today)
+    system_prompt_content = template_Promotion_without_date.replace("{current_date}", today)
     sql_summary_prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt_content),
         MessagesPlaceholder(variable_name="history"), # Include history
         ("human", "Context:\n{context}") # Provide context and specific instruction
     ])
+
+    # Chain for generating the summary (using the main chat_model for streaming)
+    # Ensure chat_model is defined and is a streaming-capable LLM instance
     summary_chain = sql_summary_prompt | chat_model
+
+    # Get history excluding the last human message which triggered this flow
     history = list(messages[:-1]) if messages else []
+
+    # --- Use .astream() to collect content for state ---
     final_content = ""
     print("--- Node generate_response_from_sql: Starting internal .astream() ---") # DEBUG LOG
     stream_ran = False
@@ -353,39 +505,14 @@ async def generate_response_from_sql(state: 'GraphState') -> Dict:
         print(f"!!! ERROR internal .astream() in generate_response_from_sql: {stream_err} !!!")
         traceback.print_exc()
         final_content = f"Sorry, an error occurred while generating the response: {stream_err}" # Fallback content
+
+    # Construct the full AIMessage for history
     response_message = AIMessage(content=final_content)
+
+    # Return the fully accumulated content for the state
+    # The client stream is handled by astream_events processing the same LLM call
     return {"llm_response_content": final_content, "messages": [response_message]}
 
-# async def get_po_details(po_id: str) -> List[Dict[str, Any]]:
-#     """
-#     Fetch all rows from podetails for the given purchase-order ID.
-#     Returns a list of dicts, one per row.
-#     """
-#     # Parameterized SQL to avoid injection and handle quoting
-#     sql = text("SELECT * FROM podetails WHERE poId = :po_id")
-#     try:
-#         # Acquire a session (sync). Adjust if using async.
-#         db = next(get_db())
-#         print(f"--- Executing SQL Query: {sql} with po_id={po_id} ---")
-
-#         result = db.execute(sql, {"po_id": po_id}).mappings().all()
-#         supplier_id= [item['supplierId'] for item in result]
-#         item_id=[item['itemId'] for item in result]
-#         # `.mappings().all()` returns a list of RowMapping → dict-like
-#         print("Supplier Id: ",supplier_id,item_id)
-#         print(f"--- Query Execution Successful: Fetched {len(result)} rows ---")
-#         return [dict(row) for row in result]
-
-#     except Exception as e:
-#         print(f"!!! Error executing SQL query: {e} !!!")
-#         traceback.print_exc()
-#         return []
-#     finally:
-#         # Always close the session if that's your pattern
-#         try:
-#             db.close()
-#         except Exception:
-#             pass
 async def generate_direct_response(state: 'GraphState') -> Dict:
     """
     Node to generate a response directly using the LLM when SQL is not applicable.
@@ -395,26 +522,41 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
     print("--- Node: generate_direct_response ---")
     messages = state.get("messages", [])
 
+    # Use the original system prompt and conversation history
+    today = datetime.datetime.now().strftime("%d/%m/%Y")
+    system_prompt_content = template_Promotion_without_date.replace("{current_date}", today)
+
     prompt_template = ChatPromptTemplate.from_messages([
         ("system", system_prompt_content),
         MessagesPlaceholder(variable_name="history"),
         ("human", "{user_input}") # Get the last human message
     ])
+
+    # Get the last human message for the current turn's input
     last_human_message = ""
     history = []
     if messages:
+        # Separate history from the last message which acts as input
         history = list(messages[:-1])
         if isinstance(messages[-1], HumanMessage):
             last_human_message = messages[-1].content
         else:
+            # Fallback if the last message isn't Human
             print("Warning: Last message in state was not HumanMessage.")
+            # Attempt to find the last human message in history
             for msg in reversed(messages):
                 if isinstance(msg, HumanMessage):
                     last_human_message = msg.content
                     break
             if not last_human_message:
                  last_human_message = "[Could not find last user message]"
+
+
+    # Chain for direct response (using the main chat_model for streaming)
+    # Ensure chat_model is defined and is a streaming-capable LLM instance
     direct_response_chain = prompt_template | chat_model
+
+    # --- Use .astream() to collect content for state ---
     final_content = ""
     print("--- Node generate_direct_response: Starting internal .astream() ---") # DEBUG LOG
     stream_ran = False
@@ -436,8 +578,14 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
         print(f"!!! ERROR internal .astream() in generate_direct_response: {stream_err} !!!")
         traceback.print_exc()
         final_content = f"Sorry, an error occurred while generating the response: {stream_err}" # Fallback content
+
+    # Construct the full AIMessage for history
     response_message = AIMessage(content=final_content)
+
+    # Return the fully accumulated content for the state
+    # The client stream is handled by astream_events processing the same LLM call
     return {"llm_response_content": final_content, "messages": [response_message]}
+
 async def extract_details(state: GraphState) -> Dict:
     """
     Node to extract structured details from the final LLM response content.
@@ -445,27 +593,39 @@ async def extract_details(state: GraphState) -> Dict:
     """
     print("--- Node: extract_details ---")
     response_text = state.get("llm_response_content")
-    extracted_data: Optional[ExtractedInvoiceDetails] = None # Default
+    extracted_data: Optional[ExtractedPromotionDetails] = None # Default
+
     if not response_text:
         print("--- No LLM response text found for extraction. Skipping. ---")
         return {"extracted_details": None}
+
+    # Simple instruction for the extractor LLM
     today = datetime.datetime.now().strftime("%d/%m/%Y")
     extraction_prompt = ChatPromptTemplate.from_messages([
-        ("system", invoice_extraction_prompt),
-        ("human", "Extract purchase order details from this text:\n\n```text\n{text_to_extract}\n```")
+        ("system", f"""
+You are an expert extraction system. Analyze the provided text, which is a response from a promotion creation assistant summarizing the current state of a promotion or answering a query. Extract the promotion details mentioned into the structured format defined by the 'ExtractedPromotionDetails' function/tool.
+
+- Today's date is {today}. Use this ONLY if needed to interpret relative dates mentioned IN THE TEXT (like "starts tomorrow"), standardizing to dd/mm/yyyy.
+- Standardize date formats found in the text to dd/mm/yyyy.
+- Extract lists for items, excluded items, stores, excluded stores.
+- If a field is explicitly mentioned as 'Missing' or not present in the text, leave its value as null or empty list.
+- Focus *only* on the details present in the text. Do not infer or add information not explicitly stated.
+"""),
+        ("human", "Extract promotion details from this text:\n\n```text\n{text_to_extract}\n```")
     ])
+
+    # Create the extraction chain
     extraction_chain = extraction_prompt | extractor_llm_structured
 
     try:
+        # Limit input text length for safety/cost
         max_len = 8000
         truncated_text = response_text[:max_len] + ("..." if len(response_text) > max_len else "")
 
         print(f"--- Extracting details from: '{truncated_text[:200]}...' ---")
         llm_extracted_data = await extraction_chain.ainvoke({"text_to_extract": truncated_text})
-        # direct_response=await generate_direct_response(state)
-        # print("direct response: ",direct_response)
 
-        if llm_extracted_data and isinstance(llm_extracted_data, ExtractedInvoiceDetails):
+        if llm_extracted_data and isinstance(llm_extracted_data, ExtractedPromotionDetails):
             print("--- Extraction Successful ---")
             extracted_data = llm_extracted_data
             print(f"Extracted Data: {extracted_data.model_dump_json(indent=2)}") # Log extracted data
@@ -477,153 +637,11 @@ async def extract_details(state: GraphState) -> Dict:
     except Exception as e:
         print(f"!!! ERROR during detail extraction: {e} !!!")
         traceback.print_exc()
+        # Keep extracted_data as None
+
     return {"extracted_details": extracted_data}
-async def get_po_details(po_id: str) -> List[Dict[str, Any]]:
-    """
-    Fetch all rows from podetails for the given purchase-order ID.
-    Returns a list of dicts, one per row.
-    """
-    # Parameterized SQL to avoid injection and handle quoting
-    sql = text("SELECT * FROM podetails WHERE poId = :po_id")
-    try:
-        # Acquire a session (sync). Adjust if using async.
-        db = next(get_db())
-        print(f"--- Executing SQL Query: {sql} with po_id={po_id} ---")
 
-        result = db.execute(sql, {"po_id": po_id}).mappings().all()
-        supplier_id= [item['supplierId'] for item in result]
-        item_id=[item['itemId'] for item in result]
-        # `.mappings().all()` returns a list of RowMapping → dict-like
-        print("Supplier Id: ",supplier_id,item_id)
-        print(f"--- Query Execution Successful: Fetched {len(result)} rows ---")
-        return [dict(row) for row in result]
-
-    except Exception as e:
-        print(f"!!! Error executing SQL query: {e} !!!")
-        traceback.print_exc()
-        return []
-    finally:
-        # Always close the session if that's your pattern
-        try:
-            db.close()
-        except Exception:
-            pass
-
-async def generate_response(state: GraphState) -> Dict:
-    print("--- Node: generate_response ---")
-    # This node already expects state["candidate_po_id"] to exist
-    po_id = state["candidate_po_id"]
-    print("Po Id:", po_id)
-
-    try:
-        po_rows = await get_po_details(po_id)
-    except Exception as e:
-        print(f"!!! Error calling get_po_details: {e} !!!")
-        po_rows = []
-
-    if po_rows:
-        supplier_ids = list({row["supplierId"] for row in po_rows})
-        item_ids = list({row["itemId"] for row in po_rows})
-        print(f"--- PO Details fetched. Suppliers: {supplier_ids}, Items: {item_ids} ---")
-
-        followup_system = (
-            f"You retrieved details for PO '{po_id}'. "
-            f"Supplier IDs: {supplier_ids}. Items: {item_ids}."
-        )
-        po_item_ids=(f" Items from PO: {item_ids}.")
-        last_human = ""
-        if state["messages"] and isinstance(state["messages"][-1], HumanMessage):
-            last_human = state["messages"][-1].content
-
-        # followup_prompt = ChatPromptTemplate.from_messages([
-        #     ("system", followup_system),
-        #     ("human", last_human)
-        # ])
-        followup_prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt_content),
-            ("human", last_human+po_item_ids)
-        ])
-        followup_chain = followup_prompt | chat_model
-
-        final_content = ""
-        async for chunk in followup_chain.astream({}):
-            if chunk.content:
-                final_content += chunk.content
-
-        response_message = AIMessage(content=final_content)
-
-        # UPDATE last_po_id so the next time we don’t re-route on the same PO again
-        return {
-            "llm_response_content": final_content,
-            "messages": [response_message],
-            "last_po_id": po_id
-        }
-    else:
-        fallback = f"I couldn't find any details for PO '{po_id}'. Please check the number and try again."
-        response_message = AIMessage(content=fallback)
-        return {
-            "llm_response_content": fallback,
-            "messages": [response_message],
-            # Leave last_po_id unchanged if no rows found
-            "last_po_id": state.get("last_po_id")
-        }
-
-async def detect_po(state: GraphState) -> Dict:
-    """
-    Invokes the PO‐detector LLM. If a new PO is found (and differs from last_po_id),
-    store it as state['candidate_po_id']; otherwise store None.
-    """
-    messages = state.get("messages", [])
-    last_text = ""
-    if messages and isinstance(messages[-1], HumanMessage):
-        last_text = messages[-1].content
-
-    print("--- Node: detect_po ---")
-    print(f"User text for PO detection: '{last_text}'")
-
-    try:
-        po_detection_result: PoIdDetection = await po_detector_llm.ainvoke(last_text)
-        # po_detection_result: PoIdDetection = await po_detector_llm.ainvoke({
-        #     "text_to_analyze": last_text
-        # })
-        print(f"LLM PO Detection Result: {po_detection_result.model_dump_json()}")
-
-        if po_detection_result.po_id_found and po_detection_result.extracted_po_id:
-            extracted = po_detection_result.extracted_po_id
-            last_po = state.get("last_po_id")
-            if last_po != extracted:
-                print(f"→ Detected new candidate_po_id: {extracted}")
-                return {"candidate_po_id": extracted}
-            else:
-                print("→ PO unchanged; clearing candidate_po_id")
-                return {"candidate_po_id": None}
-        else:
-            print("→ No PO detected in this message.")
-            return {"candidate_po_id": None}
-
-    except Exception as e:
-        print(f"!!! ERROR in detect_po: {e} !!!")
-        traceback.print_exc()
-        return {"candidate_po_id": None}
-    
-async def route_after_detect(state: GraphState) -> str:
-    """
-    Decides whether to go to generate_response (if a brand-new PO was saved)
-    or to generate_sql (if no PO or same PO as before).
-    """
-    cand = state.get("candidate_po_id")
-    last_po = state.get("last_po_id")
-    print("--- Condition: route_after_detect ---")
-    print(f" candidate_po_id = {cand!r}, last_po_id = {last_po!r}")
-
-    if cand:
-        print(f"Decision: New PO='{cand}', route → generate_response")
-        return "generate_response"
-    else:
-        print("Decision: No new PO, route → generate_sql")
-        return "generate_sql"   
-
-# # --- Conditional Edges ---
+# --- Conditional Edges ---
 def should_execute_sql(state: GraphState) -> str:
     """Determines the next step based on whether SQL was generated."""
     print("--- Condition: should_execute_sql ---")
@@ -633,115 +651,78 @@ def should_execute_sql(state: GraphState) -> str:
     else:
         print("Decision: No SQL generated, routing to generate_direct_response")
         return "generate_direct_response"
-    
-# async def should_route_after_preprocess(state: GraphState) -> str:
-#     messages = state.get("messages", [])
-#     last_text = messages[-1].content if messages and isinstance(messages[-1], HumanMessage) else ""
-#     print(f"--- Condition: should_route_after_preprocess (LLM-based PO detection) ---")
-#     try:
-#         param={"text_to_analyze": last_text}
-#         print("test",param)
-#         po_detection_result: PoIdDetection = await po_detector_llm.ainvoke(last_text)
-#         print(f"LLM PO Detection Result: {po_detection_result.model_dump_json()}")
-#         if po_detection_result.po_id_found and po_detection_result.extracted_po_id:
-#             po_id = po_detection_result.extracted_po_id
-#             last_po = state.get("last_po_id")
-#             if last_po != po_id:
-#                 state["candidate_po_id"] = po_id
-#                 print(f"Decision: Routing to generate_response_path with PO '{po_id}'")
-#                 return "generate_response_path"
-#             else:
-#                 print("Decision: PO unchanged, routing to generate_sql_path")
-#                 return "generate_sql_path"
-#         else:
-#             print("Decision: No PO detected, routing to generate_sql_path")
-#             return "generate_sql_path"
-
-#     except Exception as e:
-#         print(f"!!! ERROR during LLM PO detection: {e} !!!")
-#         traceback.print_exc()
-#         return "generate_sql_path"
 
 # --- Build the Workflow ---
 workflow = StateGraph(GraphState)
 # Add nodes
-workflow.add_node("preprocess_input",      preprocess_input)
-workflow.add_node("detect_po",             detect_po)
-workflow.add_node("generate_sql",          generate_sql)
-workflow.add_node("execute_sql",           execute_sql)
+workflow.add_node("preprocess_input", preprocess_input)
+workflow.add_node("generate_sql", generate_sql)
+workflow.add_node("execute_sql", execute_sql)
 workflow.add_node("generate_response_from_sql", generate_response_from_sql)
-workflow.add_node("generate_direct_response",    generate_direct_response)
-workflow.add_node("extract_details",       extract_details)
-workflow.add_node("generate_response",     generate_response)
-# 2) Start → preprocess_input → detect_po
-workflow.add_edge(START, "preprocess_input")
-workflow.add_edge("preprocess_input", "detect_po")
-# 3) Immediately after detect_po, run the conditional route_after_detect
-workflow.add_conditional_edges(
-    "detect_po",
-    route_after_detect,
-    {
-        "generate_sql":      "generate_sql",
-        "generate_response": "generate_response",
-    }
-)
-# 4) SQL branch
+workflow.add_node("generate_direct_response", generate_direct_response)
+workflow.add_node("extract_details", extract_details)
+# Define edges
+workflow.add_edge(START, "preprocess_input") # Start with preprocessing
+workflow.add_edge("preprocess_input", "generate_sql")
+# Conditional routing after trying to generate SQL
 workflow.add_conditional_edges(
     "generate_sql",
     should_execute_sql,
     {
-        "execute_sql":           "execute_sql",
+        "execute_sql": "execute_sql",
         "generate_direct_response": "generate_direct_response",
-    }
+    },
 )
-workflow.add_edge("execute_sql",            "generate_response_from_sql")
-# workflow.add_edge("generate_response_from_sql", "extract_details")
-workflow.add_edge("generate_response_from_sql", "generate_direct_response")
-# 5) PO-response branch
-workflow.add_edge("generate_response",      "extract_details")
-# workflow.add_edge("generate_response",      "generate_direct_response")
-workflow.add_edge("generate_direct_response",    "extract_details")
-# 6) Final step
-workflow.add_edge("extract_details",        END)
+# Path if SQL was executed
+workflow.add_edge("execute_sql", "generate_response_from_sql")
+workflow.add_edge("generate_response_from_sql", "extract_details") # Extract after generating response
+# Path if SQL was not generated
+workflow.add_edge("generate_direct_response", "extract_details") # Extract after generating response
+# Final step after extraction
+workflow.add_edge("extract_details", END)
+# --- Memory and Compilation ---
+memory = MemorySaver()
+app_runnable = workflow.compile(checkpointer=memory)
+
+# --- FastAPI Application ---
+app = FastAPI(
+    title="LangGraph Chatbot API",
+    description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
+)
+# --- API Request Model ---
 class ChatRequest(BaseModel):
     message: str
     thread_id: str | None = None
-async def stream_response_generator(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
+
+async def stream_response_generator(
+    graph_stream: AsyncIterator[Dict]
+) -> AsyncIterator[str]:
     """
-    Streams LLM response chunks for the client.  
-    Fixes “unhashable type: 'dict'” by extracting the actual node name string.
+    Asynchronously streams LLM response chunks from specified nodes
+    to the client as soon as they arrive.
     """
     print("--- STREAM GENERATOR (for client) STARTED ---")
     full_response_for_log = ""
     try:
         async for event in graph_stream:
-            if event.get("event") == "on_chat_model_stream":
+            if event["event"] == "on_chat_model_stream":
                 metadata = event.get("metadata", {})
-                node_info = metadata.get("langgraph_node")
-                if isinstance(node_info, dict):
-                    node_name = node_info.get("node") or node_info.get("name")
-                else:
-                    node_name = node_info
-                if node_name in {"generate_direct_response", "generate_response_from_sql", "generate_response"}:
+                node_name = metadata.get("langgraph_node")
+                if node_name in {"generate_direct_response", "generate_response_from_sql"}:
                     chunk = event["data"].get("chunk")
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         content = chunk.content
                         full_response_for_log += content
                         yield content
-
     except Exception as e:
         print(f"!!! ERROR in stream_response_generator: {e} !!!")
+        # If nothing has been sent yet, at least send an error
         yield f"\n\nStream error: {e}"
     finally:
         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
-# --- Memory and Compilation ---
-memory = MemorySaver()
-app_runnable = workflow.compile(checkpointer=memory)
-
-app = FastAPI(
-    title="LangGraph Chatbot API",
-    description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
-)            
+        # For debugging, you could log full_response_for_log here
+       
+# --- FastAPI Endpoint ---
 @app.post("/chat/")
 async def chat_endpoint(request: ChatRequest):
     """
@@ -752,20 +733,28 @@ async def chat_endpoint(request: ChatRequest):
     user_message = request.message
     thread_id = request.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
+
     print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+
+    # Prepare input for the graph - the input is the list of messages
     input_message = HumanMessage(content=user_message)
     input_state = {"messages": [input_message]} # Pass the new message in the list
+
     try:
+        # Use astream_events to get the stream of events from the graph execution
         graph_stream = app_runnable.astream_events(input_state, config, version="v2")
+
+        # Return a StreamingResponse that iterates over the generator
         return StreamingResponse(
             stream_response_generator(graph_stream), # Pass the graph stream to the generator
             media_type="text/event-stream" # Use text/event-stream for Server-Sent Events
+            # media_type="text/plain" # Or application/jsonl if streaming JSON chunks
         )
+
     except Exception as e:
         print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
-
 
 
 origins = [
@@ -780,7 +769,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # --- Main Execution ---
 if __name__ == "__main__":
     import uvicorn
