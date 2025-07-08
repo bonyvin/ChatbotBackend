@@ -703,10 +703,10 @@ workflow.add_edge("generate_response",      "extract_details")
 workflow.add_edge("generate_direct_response",    "extract_details")
 # 6) Final step
 workflow.add_edge("extract_details",        END)
-class ChatRequest(BaseModel):
+class ChatRequestInvoice(BaseModel):
     message: str
     thread_id: str | None = None
-async def stream_response_generator(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
+async def stream_response_generator_invoice(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
     """
     Streams LLM response chunks for the client.  
     Fixes “unhashable type: 'dict'” by extracting the actual node name string.
@@ -730,41 +730,41 @@ async def stream_response_generator(graph_stream: AsyncIterator[Dict]) -> AsyncI
                         yield content
 
     except Exception as e:
-        print(f"!!! ERROR in stream_response_generator: {e} !!!")
+        print(f"!!! ERROR in stream_response_generator_invoice: {e} !!!")
         yield f"\n\nStream error: {e}"
     finally:
         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
 # --- Memory and Compilation ---
 memory = MemorySaver()
-app_runnable = workflow.compile(checkpointer=memory)
+app_runnable_invoice = workflow.compile(checkpointer=memory)
 
 app = FastAPI(
     title="LangGraph Chatbot API",
     description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
 )            
-@app.post("/chat/")
-async def chat_endpoint(request: ChatRequest):
-    """
-    Receives user message, invokes the LangGraph app, and streams the
-    appropriate LLM response back to the client. Server-side processing
-    (SQL, extraction) happens within the graph nodes.
-    """
-    user_message = request.message
-    thread_id = request.thread_id or str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-    print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
-    input_message = HumanMessage(content=user_message)
-    input_state = {"messages": [input_message]} # Pass the new message in the list
-    try:
-        graph_stream = app_runnable.astream_events(input_state, config, version="v2")
-        return StreamingResponse(
-            stream_response_generator(graph_stream), # Pass the graph stream to the generator
-            media_type="text/event-stream" # Use text/event-stream for Server-Sent Events
-        )
-    except Exception as e:
-        print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
+# @app.post("/chat/")
+# async def chat_endpoint(request: ChatRequestInvoice):
+#     """
+#     Receives user message, invokes the LangGraph app, and streams the
+#     appropriate LLM response back to the client. Server-side processing
+#     (SQL, extraction) happens within the graph nodes.
+#     """
+#     user_message = request.message
+#     thread_id = request.thread_id or str(uuid.uuid4())
+#     config = {"configurable": {"thread_id": thread_id}}
+#     print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+#     input_message = HumanMessage(content=user_message)
+#     input_state = {"messages": [input_message]} # Pass the new message in the list
+#     try:
+#         graph_stream = app_runnable_invoice.astream_events(input_state, config, version="v2")
+#         return StreamingResponse(
+#             stream_response_generator_invoice(graph_stream), # Pass the graph stream to the generator
+#             media_type="text/event-stream" # Use text/event-stream for Server-Sent Events
+#         )
+#     except Exception as e:
+#         print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
 
 
 

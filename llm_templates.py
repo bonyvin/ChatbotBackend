@@ -520,6 +520,7 @@ Excluded Items: ITEM003,ITEM004
 Would you like to submit this information?  
 If you respond with 'Yes', I'll confirm with *"Promotion created successfully. Thank you for choosing us."*  
 """
+
 template_PO_without_date=""" 
 Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your purchase order operations and provide seamless support.Today is {current_date}.  
 

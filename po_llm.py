@@ -676,7 +676,7 @@ workflow.add_edge("extract_details", END)
 
 # --- Memory and Compilation ---
 memory = MemorySaver()
-app_runnable = workflow.compile(checkpointer=memory)
+app_runnable_purchase_order = workflow.compile(checkpointer=memory)
 
 # --- FastAPI Application ---
 app = FastAPI(
@@ -698,12 +698,12 @@ app.add_middleware(
 )
 
 # --- API Request Model ---
-class ChatRequest(BaseModel):
+class ChatRequestPurchaseOrder(BaseModel):
     message: str
     thread_id: str | None = None
 
 
-async def stream_response_generator(
+async def stream_response_generator_purchase_order(
     graph_stream: AsyncIterator[Dict]
 ) -> AsyncIterator[str]:
     """
@@ -724,7 +724,7 @@ async def stream_response_generator(
                         full_response_for_log += content
                         yield content
     except Exception as e:
-        print(f"!!! ERROR in stream_response_generator: {e} !!!")
+        print(f"!!! ERROR in stream_response_generator_purchase_order: {e} !!!")
         # If nothing has been sent yet, at least send an error
         yield f"\n\nStream error: {e}"
     finally:
@@ -733,38 +733,38 @@ async def stream_response_generator(
 
             
 # --- FastAPI Endpoint ---
-@app.post("/chat/")
-async def chat_endpoint(request: ChatRequest):
-    """
-    Receives user message, invokes the LangGraph app, and streams the
-    appropriate LLM response back to the client. Server-side processing
-    (SQL, extraction) happens within the graph nodes.
-    """
-    user_message = request.message
-    thread_id = request.thread_id or str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
+# @app.post("/chat/")
+# async def chat_endpoint(request: ChatRequestPurchaseOrder):
+#     """
+#     Receives user message, invokes the LangGraph app, and streams the
+#     appropriate LLM response back to the client. Server-side processing
+#     (SQL, extraction) happens within the graph nodes.
+#     """
+#     user_message = request.message
+#     thread_id = request.thread_id or str(uuid.uuid4())
+#     config = {"configurable": {"thread_id": thread_id}}
 
-    print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+#     print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
 
-    # Prepare input for the graph - the input is the list of messages
-    input_message = HumanMessage(content=user_message)
-    input_state = {"messages": [input_message]} # Pass the new message in the list
+#     # Prepare input for the graph - the input is the list of messages
+#     input_message = HumanMessage(content=user_message)
+#     input_state = {"messages": [input_message]} # Pass the new message in the list
 
-    try:
-        # Use astream_events to get the stream of events from the graph execution
-        graph_stream = app_runnable.astream_events(input_state, config, version="v2")
+#     try:
+#         # Use astream_events to get the stream of events from the graph execution
+#         graph_stream = app_runnable_purchase_order.astream_events(input_state, config, version="v2")
 
-        # Return a StreamingResponse that iterates over the generator
-        return StreamingResponse(
-            stream_response_generator(graph_stream), # Pass the graph stream to the generator
-            media_type="text/event-stream" # Use text/event-stream for Server-Sent Events
-            # media_type="text/plain" # Or application/jsonl if streaming JSON chunks
-        )
+#         # Return a StreamingResponse that iterates over the generator
+#         return StreamingResponse(
+#             stream_response_generator_purchase_order(graph_stream), # Pass the graph stream to the generator
+#             media_type="text/event-stream" # Use text/event-stream for Server-Sent Events
+#             # media_type="text/plain" # Or application/jsonl if streaming JSON chunks
+#         )
 
-    except Exception as e:
-        print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
+#     except Exception as e:
+#         print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
 
 
 # --- Main Execution ---
