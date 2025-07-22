@@ -1,5 +1,6 @@
 import datetime
 import os
+from platform import node
 import uuid
 import json
 import traceback # For detailed error logging
@@ -675,6 +676,8 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
 
 #     return {"extracted_details": extracted_data}
 
+field_details=''
+
 async def extract_details(state: GraphState) -> Dict:
     """
     Node to extract structured promotion details and user intent from the conversation so far.
@@ -766,6 +769,8 @@ async def extract_details(state: GraphState) -> Dict:
         # llm_result should be an ExtractedPromotionDetails instance
         if isinstance(llm_result, ExtractedPromotionDetails):
             extracted_data = llm_result
+            print("Extracted Data: ",llm_result)
+            field_details=llm_result
         else:
             print("--- Warning: extract_details: LLM returned unexpected type:", type(llm_result))
     except Exception as e:
@@ -980,6 +985,23 @@ async def stream_response_generator_promotion(
                         content = chunk.content
                         full_response_for_log += content
                         yield content
+            elif event["event"] == "on_node_end" and node == "extract_details":
+                output = event["data"]["output"] or {}
+                # Safely serialize any dates or Pydantic models
+                payload = {
+                    "extracted_details": getattr(output, "extracted_details", None),
+                    "user_intent": getattr(output, "user_intent", None),
+                }
+                # Convert Pydantic objects to dicts if needed
+                if hasattr(payload["extracted_details"], "dict"):
+                    payload["extracted_details"] = payload["extracted_details"].dict()
+                if hasattr(payload["user_intent"], "dict"):
+                    payload["user_intent"] = payload["user_intent"].dict()
+                # SSE custom event
+                yield (
+                    "event: extracted_details\n"
+                    f"data: {json.dumps(payload, default=str)}\n\n"
+                )
     except Exception as e:
         print(f"!!! ERROR in stream_response_generator_promotion: {e} !!!")
         # If nothing has been sent yet, at least send an error

@@ -5,7 +5,7 @@ import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
-from promo_llm import ChatRequestPromotion,stream_response_generator_promotion,app_runnable_promotion
+from promo_llm import ChatRequestPromotion,stream_response_generator_promotion,app_runnable_promotion,field_details
 from invoice_llm import ChatRequestInvoice,stream_response_generator_invoice,app_runnable_invoice
 from po_llm import ChatRequestPurchaseOrder,stream_response_generator_purchase_order,app_runnable_purchase_order
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,7 +44,6 @@ async def chat_endpoint_promotion(request: ChatRequestPromotion):
     # Prepare input for the graph - the input is the list of messages
     input_message = HumanMessage(content=user_message)
     input_state = {"messages": [input_message]} # Pass the new message in the list
-
     try:
         # Use astream_events to get the stream of events from the graph execution
         graph_stream = app_runnable_promotion.astream_events(input_state, config, version="v2")
