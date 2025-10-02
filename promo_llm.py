@@ -30,7 +30,7 @@ from langchain_core.messages import (
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
-from llm_templates import template_Promotion_without_date
+from llm_templates import template_Promotion_without_date,promotion_extraction_prompt
 # from promoUtils import template_Promotion_without_date
 from langchain_core.tools import tool
 from send_email import conf 
@@ -121,6 +121,7 @@ class ExtractedPromotionDetails(BaseModel):
     end_date: str | None = Field(None, validation_alias=AliasChoices('End Date', 'end_date'))
     stores: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Stores', 'stores'))
     excluded_stores: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Excluded Stores', 'excluded_stores'))
+    email: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Email', 'email'))
 
     class Config:
         populate_by_name = True # Allows using field names as well as aliases
@@ -142,6 +143,7 @@ class GraphState(TypedDict):
     sql_results: Optional[List[Dict] | str] # Results from DB execution or error string
     llm_response_content: Optional[str] # Content from the main LLM response node (to be streamed)
     extracted_details: Optional[ExtractedPromotionDetails] # Details extracted from LLM response
+    user_intent: Optional[UserIntent] # Intent extracted from user input - for persisting state if needed
 
 #All Models
 chat_model = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, streaming=True, temperature=0.7)
@@ -676,20 +678,290 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
 
 #     return {"extracted_details": extracted_data}
 
-field_details=''
 
+
+# async def extract_details(state: GraphState) -> Dict:
+#     """
+#     Node to extract structured promotion details and user intent from the conversation so far.
+#     Returns a dict with:
+#       - "extracted_details": ExtractedPromotionDetails or None on failure
+#       - "user_intent": UserIntent or None on failure
+#     """
+#     print("--- Node: extract_details ---")
+#     extracted_data: Optional[ExtractedPromotionDetails] = None
+#     user_intent: Optional[UserIntent] = None
+
+#     # 1. Build chat_history string from state['messages']
+#     chat_history_lines: List[str] = []
+#     for msg in state.get("messages", []):
+#         if isinstance(msg, HumanMessage):
+#             chat_history_lines.append(f"User: {msg.content}")
+#         elif isinstance(msg, AIMessage):
+#             chat_history_lines.append(f"Bot: {msg.content}")
+#         else:
+#             # Other message types (ToolMessage, SystemMessage) can be included or skipped.
+#             # For clarity, we skip or treat ToolMessage as Bot.
+#             if hasattr(msg, "content"):
+#                 chat_history_lines.append(f"Bot: {msg.content}")
+#     chat_history_str = "\n".join(chat_history_lines)
+
+#     # 2. Determine missing fields based on any previously extracted details
+#     prev: Optional[ExtractedPromotionDetails] = state.get("extracted_details")
+#     missing_fields: List[str] = []
+
+#     # Required fields: promotion_type, hierarchy_type & hierarchy_value, brand, items, discount_type & discount_value, start_date, end_date, stores.
+#     if prev is None or not prev.promotion_type:
+#         missing_fields.append("Promotion Type")
+#     # Hierarchy: requires both type and value
+#     if prev is None or not prev.hierarchy_type:
+#         missing_fields.append("Hierarchy Level Type")
+#     if prev is None or not prev.hierarchy_value:
+#         missing_fields.append("Hierarchy Level Value")
+#     if prev is None or not prev.brand:
+#         missing_fields.append("Brand")
+#     # Items: require at least one item or a natural-language instruction that can be expanded to items
+#     if prev is None or not prev.items:
+#         missing_fields.append("Items")
+#     # Discount
+#     if prev is None or not prev.discount_type:
+#         missing_fields.append("Discount Type")
+#     if prev is None or not prev.discount_value:
+#         missing_fields.append("Discount Value")
+#     # Dates
+#     if prev is None or not prev.start_date:
+#         missing_fields.append("Start Date")
+#     if prev is None or not prev.end_date:
+#         missing_fields.append("End Date")
+#     # Stores
+#     if prev is None or not prev.stores:
+#         missing_fields.append("Stores")
+#     # Note: excluded_items and excluded_stores are optional; we do not require them here.
+
+#     missing_fields_str = ""
+#     if missing_fields:
+#         # Format as bullet list
+#         missing_fields_str = "\n".join(f"- {fld}" for fld in missing_fields)
+#     else:
+#         missing_fields_str = "None"
+
+#     # 3. Fill in the prompt template
+#     # Compute current date in dd/mm/yyyy
+#     current_date = datetime.date.today().strftime("%d/%m/%Y")
+
+#     # The template uses {current_date}, {{chat_history}}, {{missing_fields}}.
+#     # We do a simple replace. Be careful that the template indeed contains these placeholders exactly.
+#     try:
+#         prompt_filled = template_Promotion_without_date \
+#             .replace("{current_date}", current_date) \
+#             .replace("{{chat_history}}", chat_history_str) \
+#             .replace("{{missing_fields}}", missing_fields_str)
+#     except Exception as e:
+#         print(f"Error formatting template_Promotion_without_date: {e}")
+#         prompt_filled = template_Promotion_without_date
+#         # Fallback: we could still proceed, but chat_history/missing_fields won't be in prompt.
+
+#     # 4. Invoke the structured extraction LLM to parse promotion details
+#     try:
+#         # Build a ChatPromptTemplate without further variables since prompt is already filled
+#         detail_prompt = ChatPromptTemplate.from_messages([
+#             ("system", prompt_filled)
+#         ])
+#         # Use the structured chain
+#         llm_result = await (detail_prompt | extractor_llm_structured).ainvoke({})
+#         # llm_result should be an ExtractedPromotionDetails instance
+#         if isinstance(llm_result, ExtractedPromotionDetails):
+#             extracted_data = llm_result
+#             # print("Extracted Data: ",llm_result)
+#         else:
+#             print("--- Warning: extract_details: LLM returned unexpected type:", type(llm_result))
+#     except Exception as e:
+#         print(f"!!! ERROR during promotion detail extraction: {e} !!!")
+#         traceback.print_exc()
+
+#     # 5. Extract user intent from last bot/user turn
+#     try:
+#         last_bot_message = None
+#         current_user_message = None
+#         current_bot_message = None
+
+#         # Collect only Human and AI messages
+#         relevant_msgs = [msg for msg in state.get("messages", []) if isinstance(msg, (HumanMessage, AIMessage))]
+
+#         # Separate Human and AI messages
+#         human_msgs = [msg for msg in relevant_msgs if isinstance(msg, HumanMessage)]
+#         ai_msgs = [msg for msg in relevant_msgs if isinstance(msg, AIMessage)]
+
+#         # Last bot message: 2nd-last AI message
+#         if len(ai_msgs) >= 2:
+#             last_bot_message = ai_msgs[-2].content
+
+#         # Current user message: last Human message
+#         if human_msgs:
+#             current_user_message = human_msgs[-1].content
+
+#         # Current bot message: last AI message
+#         if ai_msgs:
+#             current_bot_message = ai_msgs[-1].content
+
+#         # Fallback if not enough data
+#         last_bot_message = last_bot_message or ""
+#         current_user_message = current_user_message or ""
+#         current_bot_message = current_bot_message or ""
+
+#         # Build a complete context string
+#         full_context = f"""Previous Bot: {last_bot_message}
+#     Current User: {current_user_message}
+#     Current Bot: {current_bot_message}"""
+
+#         intent_system = (
+#             "You are a highly reliable intent classification engine for a promotions chatbot.\n"
+#             "**Your job**: Given three lines of context—“Previous Bot,” “Current User,” and “Current Bot”—decide which of these four intents the user is expressing _right now_:\n\n"
+#             "  1. **Promotion Creation**  \n"
+#             "     The user is explicitly initiating a brand-new promotion.  \n"
+#             "     *Trigger phrases* include “I want to create a promotion,” “Let's make a promo,” “Start a new discount,” etc.\n\n"
+#             "  2. **Submission**  \n"
+#             # "     The user is confirming final submission _and_ the bot has just acknowledged success.  \n"
+#             # "     **Strict Rule:** Previous Bot must have asked “Would you like to submit this information?”,\n"
+#             # "     Current User must reply with a confirmation (“Yes”/“Sure”/“Okay” etc.),\n"
+#             # "     **and** Current Bot must be a success message containing “Promotion created successfully. Thank you for choosing us.”\n\n"
+#             "     - The user has just confirmed submission **AND** the bot has immediately replied with a success message.\n"
+#             "     - **Strict rule**: \n"
+#             "         • Current User must be a confirmation (e.g. “Yes”, “Sure”, “Okay”).  \n"
+#             "         • Current Bot must contain exactly “Promotion created successfully. Thank you for choosing us.”  \n\n"
+#             "  3. **Detail Filling**  \n"
+#             "     The user is providing or updating one or more promotion fields (e.g. “Promotion Type: Simple,” “Brand: H&M,” “Discount: 20%,” “Start: 01/07/2025”), or answering intermediate questions about stores/items.\n\n"
+#             "  4. **Other**  \n"
+#             "     Anything that doesn't fit the above: greetings, small talk, help requests, mistakes, etc.\n\n"
+#             "**Rules (in order)**:\n"
+#             "  1. If the **Current User** line matches a _new promotion request_ pattern, return intent=\"Promotion Creation\".  Stop.\n"
+#             "  2. Else if the Submission strict rule applies (Previous Bot asked for submission, Current User confirms, Current Bot gives a success message), return intent=\"Submission\".\n"
+#             "  3. Else if **Current User** mentions any of the required fields—Type, Hierarchy, Brand, Items, Discount, Dates, or Stores—return intent=\"Detail Filling\".  Stop.\n"
+#             "  4. Otherwise, return intent=\"Other\".\n\n"
+#             "**Example Inputs → Outputs**:\n"
+#             "```\n"
+#             "Previous Bot: (nothing yet)\n"
+#             "Current User: I want to create a promotion\n"
+#             "Current Bot: To create a promotion, I need these details…\n"
+#             "→ {{\"intent\": \"Promotion Creation\"}}\n\n"
+#             "Previous Bot: Would you like to submit this information?\n"
+#             "Current User: Yes\n"
+#             "Current Bot: Promotion created successfully. Thank you for choosing us.\n"
+#             "→ {{\"intent\": \"Submission\"}}\n\n"
+#             "Previous Bot: Promotion Type: Simple\n"
+#             "Current User: Brand: Zara and H&M\n"
+#             "Current Bot: Recorded Brand: Zara, H&M. Missing fields: Items, Discount, Dates, Stores.\n"
+#             "→ {{\"intent\": \"Detail Filling\"}}\n"
+#             "```\n\n"
+#             "**Return exactly** a JSON object with one key: `intent`, whose value is one of:\n"
+#             "  [\"Promotion Creation\", \"Detail Filling\", \"Submission\", \"Other\"]\n"
+#         )
+#         intent_prompt = ChatPromptTemplate.from_messages([
+#             ("system", intent_system),
+#             ("human", "{context}")
+#         ])
+
+#         llm_intent = await (intent_prompt | intent_extractor_llm_structured).ainvoke({
+#             "context": full_context
+#         })
+
+#         print("Predicted user intent:", llm_intent)
+
+#         if isinstance(llm_intent, UserIntent):
+#             user_intent = llm_intent
+
+#     except Exception as e:
+#         print(f"!!! ERROR during intent extraction: {e} !!!")
+#         traceback.print_exc()
+
+#         # Return results
+#     return {
+#         "extracted_details": extracted_data,
+#         "user_intent": user_intent
+#     }
+
+#Uncomment above extract_details to replace the existing one
+from fastapi.encoders import jsonable_encoder
+
+def _to_plain(obj):
+    """Return a plain-serializable Python object from dict / pydantic v1/v2 / simple values."""
+    if obj is None:
+        return None
+    if isinstance(obj, (dict, list, str, int, float, bool)):
+        return obj
+    # Pydantic v2
+    if hasattr(obj, "model_dump"):
+        try:
+            return obj.model_dump()
+        except Exception:
+            pass
+    # Pydantic v1
+    if hasattr(obj, "dict"):
+        try:
+            return obj.dict()
+        except Exception:
+            pass
+    # fallback to jsonable_encoder
+    try:
+        return jsonable_encoder(obj)
+    except Exception:
+        return str(obj)
+
+intent_system = (
+    "You are a highly reliable intent classification engine for a promotions chatbot.\n"
+    "**Your job**: Given three lines of context—“Previous Bot,” “Current User,” and “Current Bot”—decide which of these four intents the user is expressing _right now_:\n\n"
+    "  1. **Promotion Creation**  \n"
+    "     The user is explicitly initiating a brand-new promotion.  \n"
+    "     *Trigger phrases* include “I want to create a promotion,” “Let's make a promo,” “Start a new discount,” etc.\n\n"
+    "  2. **Submission**  \n"
+    # "     The user is confirming final submission _and_ the bot has just acknowledged success.  \n"
+    # "     **Strict Rule:** Previous Bot must have asked “Would you like to submit this information?”,\n"
+    # "     Current User must reply with a confirmation (“Yes”/“Sure”/“Okay” etc.),\n"
+    # "     **and** Current Bot must be a success message containing “Promotion created successfully. Thank you for choosing us.”\n\n"
+    "     - The user has just confirmed submission **AND** the bot has immediately replied with a success message.\n"
+    "     - **Strict rule**: \n"
+    "         • Current User must be a confirmation (e.g. “Yes”, “Sure”, “Okay”).  \n"
+    "         • Current Bot must contain exactly “Promotion created successfully. Thank you for choosing us.”  \n\n"
+    "  3. **Detail Filling**  \n"
+    "     The user is providing or updating one or more promotion fields (e.g. “Promotion Type: Simple,” “Brand: H&M,” “Discount: 20%,” “Start: 01/07/2025”), or answering intermediate questions about stores/items.\n\n"
+    "  4. **Other**  \n"
+    "     Anything that doesn't fit the above: greetings, small talk, help requests, mistakes, etc.\n\n"
+    "**Rules (in order)**:\n"
+    "  1. If the **Current User** line matches a _new promotion request_ pattern, return intent=\"Promotion Creation\".  Stop.\n"
+    "  2. Else if the Submission strict rule applies (Previous Bot asked for submission, Current User confirms, Current Bot gives a success message), return intent=\"Submission\".\n"
+    "  3. Else if **Current User** mentions any of the required fields—Type, Hierarchy, Brand, Items, Discount, Dates, or Stores—return intent=\"Detail Filling\".  Stop.\n"
+    "  4. Otherwise, return intent=\"Other\".\n\n"
+    "**Example Inputs → Outputs**:\n"
+    "```\n"
+    "Previous Bot: (nothing yet)\n"
+    "Current User: I want to create a promotion\n"
+    "Current Bot: To create a promotion, I need these details…\n"
+    "→ {{\"intent\": \"Promotion Creation\"}}\n\n"
+    "Previous Bot: Would you like to submit this information?\n"
+    "Current User: Yes\n"
+    "Current Bot: Promotion created successfully. Thank you for choosing us.\n"
+    "→ {{\"intent\": \"Submission\"}}\n\n"
+    "Previous Bot: Promotion Type: Simple\n"
+    "Current User: Brand: Zara and H&M\n"
+    "Current Bot: Recorded Brand: Zara, H&M. Missing fields: Items, Discount, Dates, Stores.\n"
+    "→ {{\"intent\": \"Detail Filling\"}}\n"
+    "```\n\n"
+    "**Return exactly** a JSON object with one key: `intent`, whose value is one of:\n"
+    "  [\"Promotion Creation\", \"Detail Filling\", \"Submission\", \"Other\"]\n"
+)
+# Replace your existing extract_details with this version
 async def extract_details(state: GraphState) -> Dict:
     """
     Node to extract structured promotion details and user intent from the conversation so far.
-    Returns a dict with:
-      - "extracted_details": ExtractedPromotionDetails or None on failure
-      - "user_intent": UserIntent or None on failure
+    Returns:
+      - extracted_details
+      - user_intent
+    This version prints user_intent at several stages for debugging.
     """
-    print("--- Node: extract_details ---")
+    print("--- Node: extract_details (ENTER) ---")
     extracted_data: Optional[ExtractedPromotionDetails] = None
     user_intent: Optional[UserIntent] = None
 
-    # 1. Build chat_history string from state['messages']
+    # Build chat_history string (unchanged)
     chat_history_lines: List[str] = []
     for msg in state.get("messages", []):
         if isinstance(msg, HumanMessage):
@@ -697,117 +969,105 @@ async def extract_details(state: GraphState) -> Dict:
         elif isinstance(msg, AIMessage):
             chat_history_lines.append(f"Bot: {msg.content}")
         else:
-            # Other message types (ToolMessage, SystemMessage) can be included or skipped.
-            # For clarity, we skip or treat ToolMessage as Bot.
             if hasattr(msg, "content"):
                 chat_history_lines.append(f"Bot: {msg.content}")
     chat_history_str = "\n".join(chat_history_lines)
 
-    # 2. Determine missing fields based on any previously extracted details
+    # build missing_fields (unchanged)
     prev: Optional[ExtractedPromotionDetails] = state.get("extracted_details")
     missing_fields: List[str] = []
-
-    # Required fields: promotion_type, hierarchy_type & hierarchy_value, brand, items, discount_type & discount_value, start_date, end_date, stores.
-    if prev is None or not prev.promotion_type:
+    if prev is None or not getattr(prev, "promotion_type", None):
         missing_fields.append("Promotion Type")
-    # Hierarchy: requires both type and value
-    if prev is None or not prev.hierarchy_type:
+    if prev is None or not getattr(prev, "hierarchy_type", None):
         missing_fields.append("Hierarchy Level Type")
-    if prev is None or not prev.hierarchy_value:
+    if prev is None or not getattr(prev, "hierarchy_value", None):
         missing_fields.append("Hierarchy Level Value")
-    if prev is None or not prev.brand:
+    if prev is None or not getattr(prev, "brand", None):
         missing_fields.append("Brand")
-    # Items: require at least one item or a natural-language instruction that can be expanded to items
-    if prev is None or not prev.items:
+    if prev is None or not getattr(prev, "items", None):
         missing_fields.append("Items")
-    # Discount
-    if prev is None or not prev.discount_type:
+    if prev is None or not getattr(prev, "discount_type", None):
         missing_fields.append("Discount Type")
-    if prev is None or not prev.discount_value:
+    if prev is None or not getattr(prev, "discount_value", None):
         missing_fields.append("Discount Value")
-    # Dates
-    if prev is None or not prev.start_date:
+    if prev is None or not getattr(prev, "start_date", None):
         missing_fields.append("Start Date")
-    if prev is None or not prev.end_date:
+    if prev is None or not getattr(prev, "end_date", None):
         missing_fields.append("End Date")
-    # Stores
-    if prev is None or not prev.stores:
+    if prev is None or not getattr(prev, "stores", None):
         missing_fields.append("Stores")
-    # Note: excluded_items and excluded_stores are optional; we do not require them here.
 
-    missing_fields_str = ""
-    if missing_fields:
-        # Format as bullet list
-        missing_fields_str = "\n".join(f"- {fld}" for fld in missing_fields)
-    else:
-        missing_fields_str = "None"
+    missing_fields_str = "\n".join(f"- {f}" for f in missing_fields) if missing_fields else "None"
 
-    # 3. Fill in the prompt template
-    # Compute current date in dd/mm/yyyy
+    # prepare prompt_filled (unchanged)
     current_date = datetime.date.today().strftime("%d/%m/%Y")
-
-    # The template uses {current_date}, {{chat_history}}, {{missing_fields}}.
-    # We do a simple replace. Be careful that the template indeed contains these placeholders exactly.
+    # try:
+    #     prompt_filled = template_Promotion_without_date \
+    #         .replace("{current_date}", current_date) \
+    #         .replace("{{chat_history}}", chat_history_str) \
+    #         .replace("{{missing_fields}}", missing_fields_str)
+    # except Exception as e:
+    #     print(f"Error formatting template_Promotion_without_date: {e}")
+    #     prompt_filled = template_Promotion_without_date
     try:
-        prompt_filled = template_Promotion_without_date \
-            .replace("{current_date}", current_date) \
-            .replace("{{chat_history}}", chat_history_str) \
-            .replace("{{missing_fields}}", missing_fields_str)
+        prompt_filled = promotion_extraction_prompt \
+            .replace("{{extracted_text}}", chat_history_str) 
     except Exception as e:
         print(f"Error formatting template_Promotion_without_date: {e}")
         prompt_filled = template_Promotion_without_date
-        # Fallback: we could still proceed, but chat_history/missing_fields won't be in prompt.
 
-    # 4. Invoke the structured extraction LLM to parse promotion details
+    # 4. Invoke structured extractor LLM
     try:
-        # Build a ChatPromptTemplate without further variables since prompt is already filled
         detail_prompt = ChatPromptTemplate.from_messages([
             ("system", prompt_filled)
         ])
-        # Use the structured chain
+        print("--- extract_details: invoking extractor_llm_structured ---")
         llm_result = await (detail_prompt | extractor_llm_structured).ainvoke({})
-        # llm_result should be an ExtractedPromotionDetails instance
+        print("--- extract_details: extractor_llm_structured returned ---")
+        # Debug print raw llm_result
+        try:
+            print("RAW llm_result (repr):", repr(llm_result))
+        except Exception:
+            print("RAW llm_result: <unprintable>")
+
         if isinstance(llm_result, ExtractedPromotionDetails):
             extracted_data = llm_result
-            print("Extracted Data: ",llm_result)
-            field_details=llm_result
+            print("--- extract_details: extracted_data populated ---")
+            print("extracted_data (plain):", _to_plain(extracted_data))
         else:
             print("--- Warning: extract_details: LLM returned unexpected type:", type(llm_result))
+            # Attempt to salvage if the LLM returned a dict-like shape
+            try:
+                extracted_data = _to_plain(llm_result)
+                print("extract_details: salvaged extracted_data:", extracted_data)
+            except Exception:
+                pass
     except Exception as e:
         print(f"!!! ERROR during promotion detail extraction: {e} !!!")
         traceback.print_exc()
 
-    # 5. Extract user intent from last bot/user turn
+    # 5. Extract user intent (with verbose prints)
     try:
+        print("--- extract_details: Starting intent extraction ---")
         last_bot_message = None
         current_user_message = None
         current_bot_message = None
 
-        # Collect only Human and AI messages
         relevant_msgs = [msg for msg in state.get("messages", []) if isinstance(msg, (HumanMessage, AIMessage))]
-
-        # Separate Human and AI messages
         human_msgs = [msg for msg in relevant_msgs if isinstance(msg, HumanMessage)]
         ai_msgs = [msg for msg in relevant_msgs if isinstance(msg, AIMessage)]
 
-        # Last bot message: 2nd-last AI message
         if len(ai_msgs) >= 2:
             last_bot_message = ai_msgs[-2].content
-
-        # Current user message: last Human message
         if human_msgs:
             current_user_message = human_msgs[-1].content
-
-        # Current bot message: last AI message
         if ai_msgs:
             current_bot_message = ai_msgs[-1].content
 
-        # Fallback if not enough data
         last_bot_message = last_bot_message or ""
         current_user_message = current_user_message or ""
         current_bot_message = current_bot_message or ""
 
-        # Build a complete context string
         full_context = f"""Previous Bot: {last_bot_message}
     Current User: {current_user_message}
     Current Bot: {current_bot_message}"""
@@ -815,110 +1075,47 @@ async def extract_details(state: GraphState) -> Dict:
         print("INTENT CLASSIFIER CONTEXT >>>")
         print(full_context)
 
-        # Updated classification instruction
-        # intent_system = (
-        #     """
-        #     "You are an intelligent intent classification engine.\n"
-        #     "You will be given the previous bot message, the current user message, and the current bot response.\n"
-        #     "Classify the user's **actual intention** at this point in the conversation.\n"
-        #     "Available intent types: [\"Promotion Creation\", \"Detail Filling\", \"Submission\", \"Other\"]\n"
-        #     "Return a valid JSON object: {{ \"intent\": string }} where the intent is one of the listed values.\n"
-        #     "Use context wisely — for example:\n"
-        #     "- If the user initiates a new promotion (e.g., 'I want to create a promotion'), the intent is 'Promotion Creation'.\n"
-        #     "- If the user is just providing fields (like brand, type), it's 'Detail Filling'.\n"
-        #     "- If the bot asks for submission and the user says 'yes', it's 'Submission'."
-        #     Examples:
-        #     ---
-        #     Previous Bot:
-        #     Current User: I want to create a promotion
-        #     Current Bot: Got it. Please fill the following:
-        #     → "Promotion Creation"
-        #     ---
-        #     Previous Bot: Would you like to submit this?
-        #     Current User: Yes
-        #     Current Bot: Promotion submitted successfully.
-        #     → "Submission"
-        #     """
-        # )
-        # intent_system = (
-        #     "You are a highly reliable intent classification engine for a promotions chatbot.\n"
-        #     "You will be given three lines:\n"
-        #     "  • Previous Bot: what the bot said before the user's last utterance\n"
-        #     "  • Current User: the user's most recent message\n"
-        #     "  • Current Bot: the bot's immediate reply to that message\n\n"
-        #     "**Rules (in order of precedence):**\n"
-        #     "1. **If** the Current User line contains a direct request to start or create a promotion (e.g. “I want to create a promotion”, “Let's make a promo”), **output** intent=\"Promotion Creation\" and ignore everything else.\n"
-        #     "2. **Else if** the Previous Bot line is something like 'Would you like to submit this information?  ', and the Current User line is simply 'Yes'/'No'/'Sure'/'Okay'/'Any other positive response confirming submission', and the Current Bot response contains 'Promotion created successfully. Thank you for choosing us.' in response, **output** intent=\"Submission\".\n"
-        #     # "2. **Else if** the Current User line is simply “Yes”/“No”/“Sure”/“Okay” in answer to a submission-prompt (“Would you like to submit?”), **output** intent=\"Submission\".\n"
-        #     "3. **Else if** the Current User line provides or updates one or more promotion fields (brand, items, discount, dates, etc.), **output** intent=\"Detail Filling\".\n"
-        #     "4. **Otherwise**, **output** intent=\"Other\".\n\n"
-        #     "**Return exactly** a JSON object: {{\"intent\": \"<one of the four>\"}}\n"
-        # )
-        intent_system = (
-            "You are a highly reliable intent classification engine for a promotions chatbot.\n"
-            "**Your job**: Given three lines of context—“Previous Bot,” “Current User,” and “Current Bot”—decide which of these four intents the user is expressing _right now_:\n\n"
-            "  1. **Promotion Creation**  \n"
-            "     The user is explicitly initiating a brand-new promotion.  \n"
-            "     *Trigger phrases* include “I want to create a promotion,” “Let's make a promo,” “Start a new discount,” etc.\n\n"
-            "  2. **Submission**  \n"
-            # "     The user is confirming final submission _and_ the bot has just acknowledged success.  \n"
-            # "     **Strict Rule:** Previous Bot must have asked “Would you like to submit this information?”,\n"
-            # "     Current User must reply with a confirmation (“Yes”/“Sure”/“Okay” etc.),\n"
-            # "     **and** Current Bot must be a success message containing “Promotion created successfully. Thank you for choosing us.”\n\n"
-            "     - The user has just confirmed submission **AND** the bot has immediately replied with a success message.\n"
-            "     - **Strict rule**: \n"
-            "         • Current User must be a confirmation (e.g. “Yes”, “Sure”, “Okay”).  \n"
-            "         • Current Bot must contain exactly “Promotion created successfully. Thank you for choosing us.”  \n\n"
-            "  3. **Detail Filling**  \n"
-            "     The user is providing or updating one or more promotion fields (e.g. “Promotion Type: Simple,” “Brand: H&M,” “Discount: 20%,” “Start: 01/07/2025”), or answering intermediate questions about stores/items.\n\n"
-            "  4. **Other**  \n"
-            "     Anything that doesn't fit the above: greetings, small talk, help requests, mistakes, etc.\n\n"
-            "**Rules (in order)**:\n"
-            "  1. If the **Current User** line matches a _new promotion request_ pattern, return intent=\"Promotion Creation\".  Stop.\n"
-            "  2. Else if the Submission strict rule applies (Previous Bot asked for submission, Current User confirms, Current Bot gives a success message), return intent=\"Submission\".\n"
-            "  3. Else if **Current User** mentions any of the required fields—Type, Hierarchy, Brand, Items, Discount, Dates, or Stores—return intent=\"Detail Filling\".  Stop.\n"
-            "  4. Otherwise, return intent=\"Other\".\n\n"
-            "**Example Inputs → Outputs**:\n"
-            "```\n"
-            "Previous Bot: (nothing yet)\n"
-            "Current User: I want to create a promotion\n"
-            "Current Bot: To create a promotion, I need these details…\n"
-            "→ {{\"intent\": \"Promotion Creation\"}}\n\n"
-            "Previous Bot: Would you like to submit this information?\n"
-            "Current User: Yes\n"
-            "Current Bot: Promotion created successfully. Thank you for choosing us.\n"
-            "→ {{\"intent\": \"Submission\"}}\n\n"
-            "Previous Bot: Promotion Type: Simple\n"
-            "Current User: Brand: Zara and H&M\n"
-            "Current Bot: Recorded Brand: Zara, H&M. Missing fields: Items, Discount, Dates, Stores.\n"
-            "→ {{\"intent\": \"Detail Filling\"}}\n"
-            "```\n\n"
-            "**Return exactly** a JSON object with one key: `intent`, whose value is one of:\n"
-            "  [\"Promotion Creation\", \"Detail Filling\", \"Submission\", \"Other\"]\n"
-        )
         intent_prompt = ChatPromptTemplate.from_messages([
             ("system", intent_system),
             ("human", "{context}")
         ])
 
+        # BEFORE calling LLM: print context shape
+        print("--- extract_details: calling intent LLM with context ---")
         llm_intent = await (intent_prompt | intent_extractor_llm_structured).ainvoke({
             "context": full_context
         })
-
-        print("Predicted user intent:", llm_intent)
-
+        print("--- extract_details: intent LLM returned ---")
+        print("RAW llm_intent (repr):", repr(llm_intent))
+        # if it's a Pydantic model class `UserIntent`, convert and inspect
         if isinstance(llm_intent, UserIntent):
             user_intent = llm_intent
+            print("Predicted user intent (UserIntent object):", _to_plain(user_intent))
+        else:
+            # try to coerce to plain
+            try:
+                print("llm_intent is not UserIntent instance; trying to plain-encode it.")
+                print("llm_intent (jsonable):", _to_plain(llm_intent))
+                # If it contains the expected shape, convert to UserIntent-like dict
+                # but do not force an actual UserIntent object unless required.
+                user_intent = _to_plain(llm_intent)
+            except Exception:
+                user_intent = None
+                print("Could not parse llm_intent into user_intent. Setting None.")
 
     except Exception as e:
         print(f"!!! ERROR during intent extraction: {e} !!!")
         traceback.print_exc()
 
-        # Return results
-        return {
-            "extracted_details": extracted_data,
-            "user_intent": user_intent
-        }
+    # Final debug print before returning node output
+    print("--- Node: extract_details (EXIT) ---")
+    print("final extracted_data (plain):", _to_plain(extracted_data))
+    print("final user_intent (plain):", _to_plain(user_intent))
+
+    return {
+        "extracted_details": extracted_data,
+        "user_intent": user_intent
+    }
 
 # --- Conditional Edges ---
 def should_execute_sql(state: GraphState) -> str:
@@ -1009,6 +1206,131 @@ async def stream_response_generator_promotion(
     finally:
         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
         # For debugging, you could log full_response_for_log here
+
+# async def stream_response_generator_promotion(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
+#     print("--- STREAM GENERATOR (for client) STARTED ---")
+#     full_response_for_log = ""
+#     try:
+#         async for event in graph_stream:
+#             event_type = event.get("event", "")
+#             metadata = event.get("metadata", {}) or {}
+#             node_name = metadata.get("langgraph_node", "") or event.get("name", "")
+
+#             # Debug/log all extract_details mentions
+#             if "extract_details" in str(event).lower() or node_name == "extract_details":
+#                 print(f"EXTRACT_DETAILS EVENT FOUND: {event_type} / node={node_name}")
+
+#             # ---------- Handle extract_details from ANY event type ----------
+#             if node_name == "extract_details":
+#                 try:
+#                     data = event.get("data", {}) or {}
+#                     output = data.get("output", None)
+
+#                     extracted_details = None
+#                     user_intent = None
+
+#                     # 1) If output already a dict with keys -> use them
+#                     if isinstance(output, dict):
+#                         extracted_details = output.get("extracted_details") or output.get("result") or output.get("tool_result")
+#                         user_intent = output.get("user_intent")
+#                     # 2) If output has .tool_calls (LangChain AIMessage with parsed tool_calls)
+#                     elif hasattr(output, "tool_calls") and getattr(output, "tool_calls"):
+#                         first = output.tool_calls[0]
+#                         # many runtimes include 'args' as a dict
+#                         if isinstance(first, dict) and "args" in first and first["args"]:
+#                             args = first["args"]
+#                             if isinstance(args, str):
+#                                 try:
+#                                     parsed = json.loads(args)
+#                                     extracted_details = parsed
+#                                 except Exception:
+#                                     extracted_details = args
+#                             else:
+#                                 extracted_details = args
+#                         # fallback to function -> arguments string
+#                         else:
+#                             func = first.get("function") if isinstance(first, dict) else None
+#                             if func and isinstance(func.get("arguments"), str):
+#                                 try:
+#                                     parsed = json.loads(func["arguments"])
+#                                     extracted_details = parsed
+#                                 except Exception:
+#                                     extracted_details = func["arguments"]
+#                     # 3) If output has additional_kwargs with tool_calls (another common shape)
+#                     elif hasattr(output, "additional_kwargs") and output.additional_kwargs:
+#                         tk = output.additional_kwargs.get("tool_calls") or []
+#                         if tk:
+#                             fc = tk[0]
+#                             # fc may contain 'args' or 'function'->{'arguments'}
+#                             if isinstance(fc, dict) and fc.get("args"):
+#                                 args = fc["args"]
+#                                 if isinstance(args, str):
+#                                     try:
+#                                         extracted_details = json.loads(args)
+#                                     except Exception:
+#                                         extracted_details = args
+#                                 else:
+#                                     extracted_details = args
+#                             else:
+#                                 func = fc.get("function") if isinstance(fc, dict) else None
+#                                 if func and isinstance(func.get("arguments"), str):
+#                                     try:
+#                                         extracted_details = json.loads(func["arguments"])
+#                                     except Exception:
+#                                         extracted_details = func["arguments"]
+
+#                     # 4) As an extra fallback, check data['llm_response_content'] or data['output_text']
+#                     if extracted_details is None:
+#                         txt = data.get("llm_response_content") or data.get("output_text") or None
+#                         if txt:
+#                             # try to JSON parse
+#                             try:
+#                                 parsed = json.loads(txt)
+#                                 extracted_details = parsed
+#                             except Exception:
+#                                 # keep textual
+#                                 extracted_details = txt
+
+#                     payload = {
+#                         "extracted_details": extracted_details,
+#                         "user_intent": user_intent,
+#                         "event_type": event_type,
+#                         "run_id": event.get("run_id"),
+#                     }
+
+#                     # Convert pydantic models to dicts if necessary
+#                     if hasattr(payload["extracted_details"], "dict"):
+#                         payload["extracted_details"] = payload["extracted_details"].dict()
+#                     if hasattr(payload["user_intent"], "dict"):
+#                         payload["user_intent"] = payload["user_intent"].dict()
+
+#                     # Send SSE custom event (JSON data)
+#                     yield (
+#                         "event: extracted_details\n"
+#                         f"data: {json.dumps(payload, default=str)}\n\n"
+#                     )
+#                 except Exception as e:
+#                     print(f"Error serializing extract_details payload: {e}")
+#                     traceback.print_exc()
+#                     # Emit an SSE error for client visibility
+#                     yield f"event: extracted_details_error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+#             # ---------- Handle normal streaming LLM chunks ----------
+#             if event_type == "on_chat_model_stream":
+#                 # only forward chunks from nodes that produce the user-facing streaming text
+#                 if node_name in {"generate_direct_response", "generate_response_from_sql"}:
+#                     chunk = event["data"].get("chunk")
+#                     if isinstance(chunk, AIMessageChunk) and getattr(chunk, "content", None):
+#                         content = chunk.content
+#                         full_response_for_log += content
+#                         yield content
+
+#     except Exception as e:
+#         print(f"Stream error: {e}")
+#         traceback.print_exc()
+#         yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+#     finally:
+#         print("--- STREAM GENERATOR ENDED ---")
 
 # --- FastAPI Application ---
 app = FastAPI(

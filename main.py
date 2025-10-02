@@ -117,6 +117,7 @@ async def send_file_new(
     fm = FastMail(conf)
     await fm.send_message(message, template_name="email-document.html")
     return JSONResponse(status_code=200, content={"message": "Email has been sent."})
+
 # async def send_file_new(
 #     file: UploadFile = File(...),
 #     email: EmailStr = Form(...),
@@ -150,19 +151,19 @@ class BodySchema(BaseModel):
     body: Dict[str, Any]
     
     
-@app.post("/email-with-body")
-async def send_with_template(email: EmailSchemaBody) -> JSONResponse:
+# @app.post("/email-with-body")
+# async def send_with_template(email: EmailSchemaBody) -> JSONResponse:
 
-    message = MessageSchema(
-        subject="Fastapi-Mail module",
-        recipients=email.dict().get("email"),
-        template_body=email.dict().get("body"),
-        subtype=MessageType.html,
-        )
+#     message = MessageSchema(
+#         subject="Fastapi-Mail module",
+#         recipients=email.dict().get("email"),
+#         template_body=email.dict().get("body"),
+#         subtype=MessageType.html,
+#         )
 
-    fm = FastMail(conf)
-    await fm.send_message(message, template_name="email.html") 
-    return JSONResponse(status_code=200, content={"message": "email has been sent"})
+#     fm = FastMail(conf)
+#     await fm.send_message(message, template_name="email.html") 
+#     return JSONResponse(status_code=200, content={"message": "email has been sent"})
 
 #Store
 @app.post("/storeCreation/", status_code=status.HTTP_201_CREATED)
@@ -1309,7 +1310,6 @@ def get_shipment_with_details(receipt_id: str, db: Session = Depends(get_db)):
     details = db.query(ShipmentDetails).filter(ShipmentDetails.receiptId == receipt_id).all()
     return {"shipment": shipment, "details": details}
 
-
 #SUPPPLIER
 @app.post("/suppliers/", response_model=SupplierCreate)
 def create_supplier(supplier: SupplierCreate, db: Session = Depends(get_db)):
@@ -1465,135 +1465,6 @@ def query_database_function(question: str) -> str:
         print("Query error: ",{str(e)})
         return f"Error executing query: {str(e)}"
 
-# @app.post("/chat")
-# async def chat_with_po_assistant(request: ChatRequest):
-#     user_id = request.user_id
-#     user_message = request.message
-
-#     # Maintain user session
-#     if user_id not in chat_histories:
-#         chat_histories[user_id] = []
-#         user_po_details[user_id] = DEFAULT_PO_STRUCTURE.copy()
-#         user_supplier_cache[user_id] = set()
-    
-#     chat_histories[user_id].append(f"User: {user_message}")
-#     conversation = "\n".join(chat_histories[user_id])
-
-#     try:
-#         # First API call - with function definition
-#         messages = [
-#             {"role": "system", "content": template_PO},
-#             {"role": "user", "content": conversation}
-#         ]
-
-#         functions = [{
-#             "name": "query_database",
-#             "description": "Retrieve data from the database using SQL queries",
-#             "parameters": {
-#                 "type": "object",
-#                 "properties": {
-#                     "question": {
-#                         "type": "string", 
-#                         "description": "Natural language question requiring database data"
-#                     }
-#                 },
-#                 "required": ["question"]
-#             }
-#         }]
-
-#         response = client.chat.completions.create(
-#             model="gpt-4o",
-#             messages=messages,
-#             functions=functions,
-#             function_call="auto",
-#             temperature=0.7,
-#             max_tokens=500
-#         )
-
-#         response_message = response.choices[0].message
-#         bot_reply = response_message.content
-#         function_call = response_message.function_call
-#         query_called = False
-
-#         # Handle function call
-#         if function_call and function_call.name == "query_database":
-#             args = json.loads(function_call.arguments)
-#             query_result = query_database_function(args["question"])
-#             query_called = True
-
-#             # Append function response to messages
-#             messages.append({
-#                 "role": "function", 
-#                 "name": "query_database",
-#                 "content": query_result
-#             })
-
-#             # Second API call with function result
-#             second_response = client.chat.completions.create(
-#                 model="gpt-4o",
-#                 messages=messages,
-#                 temperature=0.7,
-#                 max_tokens=500
-#             )
-#             bot_reply = second_response.choices[0].message.content
-
-#         # Retain po_json from previous interaction if query_called is True
-#         if not query_called:
-#             user_po_details[user_id] = await categorize_po_details(bot_reply, user_id)
-
-#         po_json = user_po_details[user_id]  # Assign retained po_json
-
-#         chat_histories[user_id].append(f"Bot: {bot_reply}")
-#         print("PO JSON:", po_json, "User ID:", user_id)
-
-#         # supplier_id= po_json.get("Supplier ID", "")
-#         # print("Supplier ID: ",supplier_id,po_json["Supplier ID"])
-#         # # Fetch PO items only if PO number is not empty and not fetched before
-#         # if supplier_id and supplier_id not in user_supplier_cache[user_id]:
-#         #     lead_time=fetch_lead_time(supplier_id)
-#         #     print("Inside supplier loop, lead time: ",supplier_id,lead_time)
-#         #     if lead_time:  # Only process if po_items is not empty
-#         #         messages.append({
-#         #             "role": "user",  # Simulate user input
-#         #             "content": f"lead time: {lead_time}"
-#         #             #change
-#         #         })
-#         #         # 
-#         #         # Mark this PO as processed
-#         #         user_supplier_cache[user_id].add(supplier_id)
-#         #         print("Messages in po chat: ",messages)
-#         #         # Second API call with updated template
-#         #         second_response = client.chat.completions.create(
-#         #             model="gpt-3.5-turbo",
-#         #             messages=messages,
-#         #             temperature=0.7,
-#         #             max_tokens=500
-#         #         )
-#         #         bot_reply = second_response.choices[0].message.content
-
-#         # Determine submission status
-#         if "Would you like to submit" in bot_reply:
-#             submissionStatus = "pending"
-#         elif "Purchase Order created successfully" in bot_reply:
-#             submissionStatus = "submitted"
-#         elif "I want to change something" in bot_reply:
-#             submissionStatus = "cancelled"
-#         else:
-#             submissionStatus = "in_progress"  # Default state if no clear intent is detected
-        
-#         print("PO submission status:", submissionStatus)
-
-#         return {
-#             "user_id": user_id,
-#             "bot_reply": bot_reply,
-#             "chat_history": chat_histories,
-#             "po_json": po_json,  # Retains values if query_called is True
-#             "submissionStatus": submissionStatus
-#         }
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-
 def details_validator_po(db: Session, supplier_id: str = None, item_ids: list = None):
     """
     Validates Supplier ID and Item IDs against the database.
@@ -1662,7 +1533,6 @@ def details_validator_po(db: Session, supplier_id: str = None, item_ids: list = 
         validation_results["all_items_exist"] = None # Or True, if no items to check means all (non-existent) items are valid.
 
     return validation_results
-
 
 def details_validator_invoice(db: Session, item_ids: list = None):
     """
@@ -2342,6 +2212,7 @@ def create_invoice(inv: invHeaderCreate, db: Session = Depends(get_db)):
     db.refresh(db_inv)
 
     return db_inv
+
 @app.post("/invDetailsAdd/", status_code=status.HTTP_201_CREATED)
 def create_invDetail(invDetailData: List[invDetailsCreate], db: Session = Depends(get_db)):
     for details in invDetailData:
@@ -2551,7 +2422,6 @@ async def upload_file(file: UploadFile = File(...)):
     structured_data = await categorize_po_details(extracted_text,"admin")
 
     return JSONResponse(content={"extracted_text": extracted_text, "structured_data": structured_data})
-
     
 @app.post("/uploadOpenAi/")
 async def upload_file(file: UploadFile = File(...)):
@@ -2560,7 +2430,6 @@ async def upload_file(file: UploadFile = File(...)):
     
     extracted_text = extract_text_with_openai(file)
     return JSONResponse(content={"extracted_text": extracted_text})
-
 
 @app.post("/upload/")
 async def upload_invoice(file: UploadFile = File(...)):

@@ -1,3 +1,34 @@
+promotion_extraction_prompt="""
+Extract the following promotion details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
+  - "value": the extracted field value (or null if missing).
+  - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
+  
+The fields and their expected formats are:
+  
+  - **Promotion Type**: one of [Simple | Buy X/Get Y | Threshold | GWP (Gift with Purchase)]
+  - **Hierarchy Type**:  An array containing one or more of the following: [Department, Class, Sub Class]
+  - **Hierarchy Value**: An array of one or more specific values for the selected Hierarchy Type (e.g., for Department, ["T-Shirt", "Shirt"])
+  - **Brand**: An array of product brands (e.g., ["FashionX", "H&M", "Zara", "Uniqlo"])
+  - **Items**: Array of SKUs/Item IDs formatted as ['ITEM001', 'ITEM002']
+  - **Excluded Items**: Array of SKUs/Item IDs formatted as ['ITEM003', 'ITEM004']
+  - **Discount Type**: one of [% Off | Fixed Price | Buy One Get One Free]
+  - **Discount Value**: Numerical amount (convert colloquial terms such as "50 bucks off" to "$50 Off")
+  - **Start Date**: (dd/mm/yyyy)
+  - **End Date**: (dd/mm/yyyy)
+  - **Stores**: Array of Store IDs formatted as ['STORE001', 'STORE002']
+  - **Excluded Stores**: Array of Store IDs formatted as ['STORE001', 'STORE002']
+  - **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
+
+Use the exact field names as given above.
+
+**Promotion Text:**
+{extracted_text}
+
+Return the response as a valid JSON object where each key is one of the fields and its value is an object in the form:
+    "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}
+  
+If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
+"""
 template_Promotion_without_date = """  
 Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your promotion operations and provide seamless support. Today is {current_date}.  
 
