@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.encoders import jsonable_encoder
 from promo_llm import ChatRequestPromotion,stream_response_generator_promotion,app_runnable_promotion 
+from promo_llm_agentic import app_runnable_promotion_agentic
 from invoice_llm import ChatRequestInvoice,stream_response_generator_invoice,app_runnable_invoice
 from po_llm import ChatRequestPurchaseOrder,stream_response_generator_purchase_order,app_runnable_purchase_order
 from fastapi.middleware.cors import CORSMiddleware
@@ -675,6 +676,40 @@ async def chat_endpoint_promotion(request: ChatRequestPromotion):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
 
+@app.post("/promotion_chat_agentic/")
+async def chat_endpoint_promotion_agentic(request: ChatRequestPromotion):
+    """
+    Receives a ChatRequestPromotion containing a user message and optional thread_id.
+    Invokes the LangGraph app for promotion chat, first running ainvoke() to log final outputs,
+    then streams the LLM response back to the client using astream_events().
+    The response is streamed as Server-Sent Events (SSE) with media_type "text/event-stream".
+    Input: JSON body matching ChatRequestPromotion schema.
+    Output: StreamingResponse of LLM-generated events.
+    """
+    user_message = request.message
+    thread_id = request.thread_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+    print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+
+    input_message = HumanMessage(content=user_message)
+    input_state = {"messages": [input_message]}
+    try:
+        # -------------------------
+        # Run graph and stream results to client (single run)
+        # -------------------------
+        graph_stream =app_runnable_promotion_agentic.astream_events(input_state, config)
+        print(f"\n--- Graph stream: {graph_stream} ---")
+        # Use your existing stream_response_generator_promotion which expects an async iterator of events.
+        return StreamingResponse(
+            stream_response_generator_promotion(graph_stream),
+            media_type="text/event-stream"
+        )
+
+    except Exception as e:
+        print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
+
 # @app.post("/promotion_extract_details/")
 # async def get_extract_details_api(request: ChatRequestPromotion):
 #     """
@@ -852,6 +887,116 @@ async def get_extract_details_api(request: ChatRequestPromotion):
         try:
             # Get current state from checkpointer without invoking
             current_state = await app_runnable_promotion.aget_state(config)
+            state_values = current_state.values if hasattr(current_state, 'values') else {}
+            
+            extracted_details_plain = _to_plain(state_values.get("extracted_details"))
+            user_intent_plain = _to_plain(state_values.get("user_intent"))
+            
+            payload = {
+                "extracted_details": extracted_details_plain,
+                "user_intent": user_intent_plain
+            }
+            
+            print("DEBUG: Returning current state payload:", jsonable_encoder(payload))
+            return JSONResponse(content=payload)
+            
+        except Exception as e:
+            print(f"!!! ERROR retrieving state: {e} !!!")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    # Original logic for non-empty messages
+    input_message = HumanMessage(content=user_message)
+    input_state = {"messages": [input_message]}
+
+    try:
+        final_state = await app_runnable_promotion.ainvoke(input_state, config)
+        print("DEBUG: final_state keys:", list(final_state.keys()))
+        # Print repr for quick inspection (careful with large objects)
+        try:
+            print("DEBUG: final_state repr snippet:", repr(final_state)[:2000])
+        except Exception:
+            print("DEBUG: final_state repr: <unprintable>")
+
+        # Attempt to find user_intent in likely locations with debug prints
+        intent_candidates = {}
+        # 1) top-level 'user_intent'
+        top_user_intent = final_state.get("user_intent")
+        print("DEBUG: top-level final_state['user_intent']:", _to_plain(top_user_intent))
+        intent_candidates["top_user_intent"] = top_user_intent
+
+        # 2) top-level 'intent_classifier' block (if present)
+        intent_classifier = final_state.get("intent_classifier")
+        print("DEBUG: final_state['intent_classifier']:", _to_plain(intent_classifier))
+        if isinstance(intent_classifier, dict):
+            intent_candidates["intent_classifier.user_intent"] = intent_classifier.get("user_intent")
+
+        # 3) extract_details node output if present
+        extract_node_data = final_state.get("extract_details")
+        print("DEBUG: final_state['extract_details'] (raw):", _to_plain(extract_node_data))
+
+        if not extract_node_data:
+            # fallback: maybe outputs were flattened into top-level keys
+            extract_node_data = {
+                "extracted_details": final_state.get("extracted_details"),
+                "user_intent": final_state.get("user_intent") or (intent_classifier and intent_classifier.get("user_intent"))
+            }
+            print("DEBUG: constructed fallback extract_node_data:", _to_plain(extract_node_data))
+
+        # Normalize extract_node_data shape (could be pydantic model or dict)
+        if not isinstance(extract_node_data, dict):
+            try:
+                extract_node_data_plain = _to_plain(extract_node_data)
+            except Exception:
+                extract_node_data_plain = {"extracted_details": None, "user_intent": None}
+        else:
+            extract_node_data_plain = extract_node_data
+
+        print("DEBUG: extract_node_data_plain:", extract_node_data_plain)
+
+        # user_intent might itself be a Pydantic model; convert to plain
+        raw_user_intent = extract_node_data_plain.get("user_intent")
+        print("DEBUG: raw_user_intent (before conversion):", repr(raw_user_intent))
+        user_intent_plain = _to_plain(raw_user_intent)
+        print("DEBUG: user_intent_plain (after conversion):", user_intent_plain)
+
+        # extracted_details conversion
+        extracted_details_raw = extract_node_data_plain.get("extracted_details")
+        extracted_details_plain = _to_plain(extracted_details_raw)
+        print("DEBUG: extracted_details_plain:", extracted_details_plain)
+
+        payload = {
+            "extracted_details": extracted_details_plain,
+            "user_intent": user_intent_plain
+        }
+
+        print("DEBUG: Returning payload:", jsonable_encoder(payload))
+        return JSONResponse(content=payload)
+
+    except Exception as e:
+        print(f"!!! ERROR in extract_details API: {e} !!!")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+    # ... rest of your existing code ...
+
+@app.post("/promotion_extract_details_agentic/")
+async def get_extract_details_api_agentic(request: ChatRequestPromotion):
+    """
+    Retrieve extracted details from current conversation state.
+    If message is empty, just return current state without processing.
+    """
+    user_message = request.message
+    thread_id = request.thread_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    print(f"\n--- [Thread: {thread_id}] Extract details request: '{user_message}' ---")
+
+    # If message is empty, just retrieve current state without invoking graph
+    if not user_message or not user_message.strip():
+        print("DEBUG: Empty message - retrieving current state only")
+        try:
+            # Get current state from checkpointer without invoking
+            current_state = await app_runnable_promotion_agentic.aget_state(config)
             state_values = current_state.values if hasattr(current_state, 'values') else {}
             
             extracted_details_plain = _to_plain(state_values.get("extracted_details"))

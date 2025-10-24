@@ -22,7 +22,7 @@ The fields and their expected formats are:
 Use the exact field names as given above.
 
 **Promotion Text:**
-{extracted_text}
+{{extracted_text}}
 
 Return the response as a valid JSON object where each key is one of the fields and its value is an object in the form:
     "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}

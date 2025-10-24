@@ -1459,14 +1459,6 @@ async def extract_details(state: GraphState) -> Dict:
 
     # prepare prompt_filled (unchanged)
     current_date = datetime.date.today().strftime("%d/%m/%Y")
-    # try:
-    #     prompt_filled = template_Promotion_without_date \
-    #         .replace("{current_date}", current_date) \
-    #         .replace("{{chat_history}}", chat_history_str) \
-    #         .replace("{{missing_fields}}", missing_fields_str)
-    # except Exception as e:
-    #     print(f"Error formatting template_Promotion_without_date: {e}")
-    #     prompt_filled = template_Promotion_without_date
     try:
         prompt_filled = promotion_extraction_prompt \
             .replace("{{extracted_text}}", chat_history_str) 
@@ -1575,6 +1567,28 @@ async def extract_details(state: GraphState) -> Dict:
         "user_intent": user_intent
     }
 
+def should_continue(state: GraphState) -> str:
+    """
+    Determines if the conversation should continue or end.
+    The chatbot loops until the user confirms submission.
+    Conditions to end:
+      - user intent == 'Submission'
+    """
+    print("--- Condition: should_continue ---")
+    user_intent = None
+
+    try:
+        user_intent = getattr(state.get("user_intent"), "intent", None)
+    except Exception as e:
+        print(f"Error reading state in should_continue: {e}")
+
+    if user_intent and user_intent.lower() == "submission":
+        print("✅ User confirmed submission. Ending conversation.")
+        return END
+
+    print("🔁 Missing details or incomplete flow. Continuing conversation.")
+    return "preprocess_input"
+
 # --- Conditional Edges ---
 def should_execute_sql(state: GraphState) -> str:
     """Determines the next step based on whether SQL was generated."""
@@ -1614,10 +1628,18 @@ workflow.add_edge("generate_response_from_sql", "extract_details") # Extract aft
 # Path if SQL was not generated
 workflow.add_edge("generate_direct_response", "extract_details") # Extract after generating response
 # Final step after extraction
-workflow.add_edge("extract_details", END)
+# workflow.add_edge("extract_details", END)
+workflow.add_conditional_edges(
+    "extract_details",
+    should_continue,
+    {
+        "preprocess_input": "preprocess_input",  # Continue the loop
+        END: END,  # Stop when complete or on submission
+    },
+)
 # --- Memory and Compilation ---
 memory = MemorySaver()
-app_runnable_promotion = workflow.compile(checkpointer=memory)
+app_runnable_promotion_agentic = workflow.compile(checkpointer=memory)
 
 # --- API Request Model ---
 async def stream_response_generator_promotion(
@@ -1665,130 +1687,6 @@ async def stream_response_generator_promotion(
         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
         # For debugging, you could log full_response_for_log here
 
-# async def stream_response_generator_promotion(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
-#     print("--- STREAM GENERATOR (for client) STARTED ---")
-#     full_response_for_log = ""
-#     try:
-#         async for event in graph_stream:
-#             event_type = event.get("event", "")
-#             metadata = event.get("metadata", {}) or {}
-#             node_name = metadata.get("langgraph_node", "") or event.get("name", "")
-
-#             # Debug/log all extract_details mentions
-#             if "extract_details" in str(event).lower() or node_name == "extract_details":
-#                 print(f"EXTRACT_DETAILS EVENT FOUND: {event_type} / node={node_name}")
-
-#             # ---------- Handle extract_details from ANY event type ----------
-#             if node_name == "extract_details":
-#                 try:
-#                     data = event.get("data", {}) or {}
-#                     output = data.get("output", None)
-
-#                     extracted_details = None
-#                     user_intent = None
-
-#                     # 1) If output already a dict with keys -> use them
-#                     if isinstance(output, dict):
-#                         extracted_details = output.get("extracted_details") or output.get("result") or output.get("tool_result")
-#                         user_intent = output.get("user_intent")
-#                     # 2) If output has .tool_calls (LangChain AIMessage with parsed tool_calls)
-#                     elif hasattr(output, "tool_calls") and getattr(output, "tool_calls"):
-#                         first = output.tool_calls[0]
-#                         # many runtimes include 'args' as a dict
-#                         if isinstance(first, dict) and "args" in first and first["args"]:
-#                             args = first["args"]
-#                             if isinstance(args, str):
-#                                 try:
-#                                     parsed = json.loads(args)
-#                                     extracted_details = parsed
-#                                 except Exception:
-#                                     extracted_details = args
-#                             else:
-#                                 extracted_details = args
-#                         # fallback to function -> arguments string
-#                         else:
-#                             func = first.get("function") if isinstance(first, dict) else None
-#                             if func and isinstance(func.get("arguments"), str):
-#                                 try:
-#                                     parsed = json.loads(func["arguments"])
-#                                     extracted_details = parsed
-#                                 except Exception:
-#                                     extracted_details = func["arguments"]
-#                     # 3) If output has additional_kwargs with tool_calls (another common shape)
-#                     elif hasattr(output, "additional_kwargs") and output.additional_kwargs:
-#                         tk = output.additional_kwargs.get("tool_calls") or []
-#                         if tk:
-#                             fc = tk[0]
-#                             # fc may contain 'args' or 'function'->{'arguments'}
-#                             if isinstance(fc, dict) and fc.get("args"):
-#                                 args = fc["args"]
-#                                 if isinstance(args, str):
-#                                     try:
-#                                         extracted_details = json.loads(args)
-#                                     except Exception:
-#                                         extracted_details = args
-#                                 else:
-#                                     extracted_details = args
-#                             else:
-#                                 func = fc.get("function") if isinstance(fc, dict) else None
-#                                 if func and isinstance(func.get("arguments"), str):
-#                                     try:
-#                                         extracted_details = json.loads(func["arguments"])
-#                                     except Exception:
-#                                         extracted_details = func["arguments"]
-
-#                     # 4) As an extra fallback, check data['llm_response_content'] or data['output_text']
-#                     if extracted_details is None:
-#                         txt = data.get("llm_response_content") or data.get("output_text") or None
-#                         if txt:
-#                             # try to JSON parse
-#                             try:
-#                                 parsed = json.loads(txt)
-#                                 extracted_details = parsed
-#                             except Exception:
-#                                 # keep textual
-#                                 extracted_details = txt
-
-#                     payload = {
-#                         "extracted_details": extracted_details,
-#                         "user_intent": user_intent,
-#                         "event_type": event_type,
-#                         "run_id": event.get("run_id"),
-#                     }
-
-#                     # Convert pydantic models to dicts if necessary
-#                     if hasattr(payload["extracted_details"], "dict"):
-#                         payload["extracted_details"] = payload["extracted_details"].dict()
-#                     if hasattr(payload["user_intent"], "dict"):
-#                         payload["user_intent"] = payload["user_intent"].dict()
-
-#                     # Send SSE custom event (JSON data)
-#                     yield (
-#                         "event: extracted_details\n"
-#                         f"data: {json.dumps(payload, default=str)}\n\n"
-#                     )
-#                 except Exception as e:
-#                     print(f"Error serializing extract_details payload: {e}")
-#                     traceback.print_exc()
-#                     # Emit an SSE error for client visibility
-#                     yield f"event: extracted_details_error\ndata: {json.dumps({'error': str(e)})}\n\n"
-
-#             # ---------- Handle normal streaming LLM chunks ----------
-#             if event_type == "on_chat_model_stream":
-#                 # only forward chunks from nodes that produce the user-facing streaming text
-#                 if node_name in {"generate_direct_response", "generate_response_from_sql"}:
-#                     chunk = event["data"].get("chunk")
-#                     if isinstance(chunk, AIMessageChunk) and getattr(chunk, "content", None):
-#                         content = chunk.content
-#                         full_response_for_log += content
-#                         yield content
-
-#     except Exception as e:
-#         print(f"Stream error: {e}")
-#         traceback.print_exc()
-#         yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-#     finally:
-#         print("--- STREAM GENERATOR ENDED ---")
 
 # --- FastAPI Application ---
 app = FastAPI(
@@ -1803,82 +1701,6 @@ def add(a: int, b: int) -> int:
 tools = [add]
 
 llm_with_tools = llm_tool_test.bind_tools(tools)
-# --- FastAPI Endpoint ---
-# @app.post("/chat/")
-# async def chat_endpoint(request: ChatRequestPromotion):
-#     """
-#     Receives user message, invokes the LangGraph app, and streams the
-#     appropriate LLM response back to the client. Server-side processing
-#     (SQL, extraction) happens within the graph nodes.
-#     """
-#     user_message = request.message
-#     thread_id = request.thread_id or str(uuid.uuid4())
-#     config = {"configurable": {"thread_id": thread_id}}
-
-#     print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
-
-#     # Prepare input for the graph - the input is the list of messages
-#     input_message = HumanMessage(content=user_message)
-#     input_state = {"messages": [input_message]} # Pass the new message in the list
-
-#     try:
-#         # Use astream_events to get the stream of events from the graph execution
-#         graph_stream = app_runnable_promotion.astream_events(input_state, config, version="v2")
-
-#         # Return a StreamingResponse that iterates over the generator
-#         # Prepare query
-#         query = "What is 3 * 12? Also, what is 11 + 49?"
-#         messages = [HumanMessage(content=query)]
-#         # Invoke LLM
-#         ai_msg = llm_with_tools.invoke(messages)
-#         # Print outputs
-#         print("=== Tool Calls ===")
-#         print(ai_msg.tool_calls)
-#         print("\n=== Model Response ===")
-#         messages.append(ai_msg)
-#         for tool_call in ai_msg.tool_calls:
-#             if tool_call["name"].lower() == "add":
-#                 tool_msg = add.invoke(tool_call)
-#                 messages.append(tool_msg)
-#             else:
-#                 raise ValueError(f"Unsupported tool: {tool_call['name']}")
-                
-#         print("Final response: ",messages)
-#         return StreamingResponse(
-#             stream_response_generator_promotion(graph_stream), # Pass the graph stream to the generator
-#             media_type="text/event-stream" # Use text/event-stream for Server-Sent Events
-#             # media_type="text/plain" # Or application/jsonl if streaming JSON chunks
-#         )
-
-#     except Exception as e:
-#         print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
-#         traceback.print_exc()
-#         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
-
-
-# @app.post("/filenew")
-# async def send_file_new(
-#     file: UploadFile = File(...),
-#     email: EmailStr = Form(...),
-#     body: str = Form(...)
-# ) -> JSONResponse:
-#     try:
-#         body_dict: Dict[str, Any] = json.loads(body)
-#     except json.JSONDecodeError:
-#         return JSONResponse(status_code=400, content={"message": "Invalid JSON in 'body' field."})
-
-#     message = MessageSchema(
-#         subject="Fastapi-Mail module",
-#         recipients=[email],
-#         template_body=body_dict,
-#         subtype=MessageType.html,
-#         attachments=[file]  # ✅ Pass UploadFile directly
-#     )
-
-#     fm = FastMail(conf)
-#     await fm.send_message(message, template_name="email-document.html")
-#     return JSONResponse(status_code=200, content={"message": "Email has been sent."})
-
 
 origins = [
     "http://localhost:3000", # Allow your frontend origin
