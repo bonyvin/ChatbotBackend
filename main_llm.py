@@ -41,7 +41,7 @@ import models
 from fastapi_mail import FastMail, MessageSchema, MessageType
 from fastapi import UploadFile, File, Form
 from fastapi.responses import JSONResponse
-
+from fastapi import WebSocket, WebSocketDisconnect
 app = FastAPI(
     title="LangGraph Chatbot API",
     description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
@@ -710,6 +710,23 @@ async def chat_endpoint_promotion_agentic(request: ChatRequestPromotion):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
 
+
+# Optional: Keep the POST endpoint for backward compatibility or testing
+@app.post("/promotion_chat_agentic/")
+async def chat_endpoint_promotion_agentic(request: ChatRequestPromotion):
+    """
+    Legacy HTTP endpoint - redirects to use WebSocket internally or returns error.
+    Consider removing this once WebSocket is fully adopted.
+    """
+    return JSONResponse(
+        status_code=426,
+        content={
+            "error": "Please use WebSocket endpoint",
+            "websocket_url": f"/ws/promotion_chat/{request.thread_id or 'new'}",
+            "message": "This endpoint has been upgraded to WebSocket for better real-time support"
+        }
+    )
+       
 # @app.post("/promotion_extract_details/")
 # async def get_extract_details_api(request: ChatRequestPromotion):
 #     """
@@ -1148,10 +1165,26 @@ async def chat_endpoint_invoice(request: ChatRequestInvoice):
         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
 
 
+# origins = [
+#     "http://localhost:3000", # Allow your frontend origin
+#     # Add other origins if needed
+# ]
 origins = [
-    "http://localhost:3000", # Allow your frontend origin
-    # Add other origins if needed
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    # Add your production domain when deploying
+    # "https://yourdomain.com"
 ]
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 app.add_middleware(
     CORSMiddleware,
@@ -1159,4 +1192,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Add WebSocket support
+    expose_headers=["*"]
 )

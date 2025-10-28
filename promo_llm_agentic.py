@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 from requests import Session # Assuming Session is used within get_db
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import WebSocket, WebSocketDisconnect
+
 
 # LangChain and LangGraph imports
 from langchain_core.output_parsers import StrOutputParser
@@ -239,29 +241,6 @@ Relationships:
 - `itemmaster.diffType1`, `itemmaster.diffType2`, `itemmaster.diffType3` link to `itemdiffs.id`.
 """
 
-# Memoized table names to avoid repeated DB calls
-# _table_names_cache = None
-
-# def get_table_names():
-#     """Fetch all table names from the database, with caching."""
-#     global _table_names_cache
-#     if _table_names_cache is not None:
-#         return _table_names_cache
-
-#     db: Optional[Session] = None
-#     try:
-#         with next(get_db()) as db: # Use context manager
-#             # Adjust query for your specific SQL dialect (MySQL example)
-#             result = db.execute(text("SHOW TABLES")).fetchall()
-#             # For PostgreSQL:
-#             # result = db.execute(text("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname != 'pg_catalog' AND schemaname != 'information_schema';")).fetchall()
-#             _table_names_cache = [row[0] for row in result] # Extract table names
-#             print(f"Fetched and cached table names: {_table_names_cache}")
-#             return _table_names_cache
-#     except Exception as e:
-#         print(f"Error fetching table names: {e}")
-#         return [] # Return empty list on error
-#     # No finally db.close() needed with context manager
 
 _table_names_cache = None
 _table_columns_cache = {}
@@ -375,139 +354,6 @@ async def preprocess_input(state: GraphState) -> Dict:
     print(f"User Query: {user_query}")
     # print("Unique Item Values :", get_unique_column_values("itemmaster", ["brand", "itemDepartment", "itemClass", "itemSubClass"]))
     return {"user_query": user_query}
-
-# async def generate_sql(state: GraphState) -> Dict:
-#     """
-#     Node to attempt generating SQL from the user query.
-#     Uses the dedicated sql_generator_llm.
-#     Includes post-processing to fix missing closing parenthesis.
-#     """
-#     print("--- Node: generate_sql ---")
-#     user_query = state.get("user_query")
-#     if not user_query:
-#         print("--- No user query found. Skipping SQL generation. ---")
-#         return {"generated_sql": None}
-#     unique_item_values = get_unique_column_values("itemmaster", ["brand", "itemDepartment", "itemClass", "itemSubClass"])
-#     unique_item_str= ', '.join(f"{k}: {v}" for k, v in unique_item_values.items())
-#     unique_item_diffs= get_unique_column_values("itemdiffs", ["diffId","diffType"])
-#     unique_item_diffs_str= ', '.join(f"{k}: {v}" for k, v in unique_item_diffs.items())
-#     unique_store_values = get_unique_column_values("storedetails", ["storeName", "city", "state","zipCode"])
-#     unique_store_str= ', '.join(f"{k}: {v}" for k, v in unique_store_values.items())
-#     # Updated prompt for SQL generation
-#     # Added emphasis on balanced parentheses in rule 7
-#     sql_generation_prompt = ChatPromptTemplate.from_messages([
-#         ("system", f"""You are an expert SQL generator. Your task is to convert the user's natural language question into a valid SQL SELECT statement based ONLY on the database schema and rules provided below.
-
-# Database Schema:
-# {TABLE_SCHEMA}
-
-# Core Task: Generate a SQL SELECT statement to retrieve `itemmaster.itemId` (and potentially other requested columns like `supplierCost`) based on the user's filtering criteria.
-
-# Rules & Instructions:
-# 1.  **Focus on Selection Criteria:** Analyze the user's request and extract ONLY the criteria relevant for selecting items (e.g., brand, color, size, department, class, subclass, supplier cost).
-# 2.  **Ignore Irrelevant Information:** Completely IGNORE any information not directly related to filtering or selecting items based on the schema. This includes discounts, promotion details, validity dates, action verbs like "Create", "Offer", "Update", store IDs (unless specifically asked to filter by store details from `storedetails`). Your output MUST be a SELECT query, nothing else.
-# 3.  **SELECT Clause:** Primarily select `im.itemId`. If supplier cost is mentioned or requested, also select `isup.supplierCost`. If other specific columns are requested, include them using the appropriate aliases (im, isup, idf, sd). Use `DISTINCT` if joins might produce duplicate `itemId`s based on the query structure.
-# 4.  **FROM Clause:** Start with `FROM itemmaster im`.
-# 5.  **JOIN Clauses:**
-#     * If filtering by `supplierCost` or selecting it, `JOIN itemsupplier isup ON im.itemId = isup.itemId`.
-#     * Filtering by attributes (color, size, material, etc. stored in `itemdiffs`) requires checking `diffType1`, `diffType2`, `diffType3`. Use the `EXISTS` method for this. See Example 1 below.
-#     * If filtering by store details, `JOIN storedetails sd ON ...` (Note: There's no direct link given between itemmaster/itemsupplier and storedetails in the schema, assume filtering by store details applies elsewhere or cannot be done with this schema unless a link is implied or added).
-# 6.  **WHERE Clause Construction:**
-#     * **Attributes (`itemdiffs`):** To filter by an attribute like 'Red' or 'Large', use `EXISTS` subqueries checking `itemdiffs` linked via `diffType1`, `diffType2`, or `diffType3`. Example: `WHERE EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red')`.
-#     * **Direct `itemmaster` Fields:**
-#         * Use `im.brand = 'Value'` for exact brand matches.
-#         * Use `im.itemDepartment LIKE 'Value%'` for department matches.
-#         * Use `im.itemClass LIKE 'Value%'` for class matches.
-#         * Use `im.itemSubClass LIKE 'Value%'` for subclass matches.
-#     * **`itemsupplier` Fields:** Use `isup.supplierCost < Value`, `isup.supplierCost > Value`, etc.
-#     * **Multiple Values (Same Field):** Use `OR` (e.g., `im.brand = 'Zara' OR im.brand = 'Adidas'`). Consider using `IN` for longer lists (e.g., `im.brand IN ('Zara', 'Adidas')`).
-#     * **Multiple Conditions (Different Fields):** Use `AND` (e.g., `im.itemDepartment LIKE 'T-Shirt%' AND im.brand = 'Zara'`). When combining multiple `EXISTS` clauses with `OR`, group them using parentheses: `AND (EXISTS(...) OR EXISTS(...))`.
-# 7.    **Output Format:** 
-#     - **Step 1: Draft**: First, think step by step (invisible to user) about how you will build the SELECT, FROM, JOIN, WHERE clauses.
-#     - **Step 2: Self-Review**: Before emitting the final answer, perform these checks:
-#          a. Balanced parentheses: count opening “(” vs closing “)”.  
-#          b. Presence of required clauses: does the query start with SELECT and include FROM?  
-#          c. No trailing logical operators: ensure no dangling `AND`/`OR` at end of WHERE.  
-#          d. Balanced quotes around string literals.  
-#          e. Joins only when needed per rules.  
-#     - **Step 3: Final Output**: Emit ONLY the SQL SELECT statement, without any commentary, explanations, backticks, or trailing semicolon.
-# 8.  **Error Handling:** If after self-review you find syntax issues or impossibility to answer, output exactly:  
-#    `Query cannot be answered with the provided schema.`
-# 9.  **Invalid Queries:** If the user's query asks for something impossible with the schema (e.g., filtering items by store without a link, asking for non-SELECT operations), respond with "Query cannot be answered with the provided schema."
-# 10. Use these unique values for reference : {unique_item_str},{unique_item_diffs_str}, {unique_store_str}.
-
-# Examples (Study these carefully):
-# Example 1: Select all red colored items
-# User Query: "Select all red colored items"
-# SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red')
-
-# Example 2: Select all red colored items with a supplier cost below $50
-# User Query: "Select all red colored items with a supplier cost below $50"
-# SQL: SELECT DISTINCT im.itemId, isup.supplierCost FROM itemmaster im JOIN itemsupplier isup ON im.itemId = isup.itemId WHERE isup.supplierCost < 50 AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red'))
-
-# Example 3: Select all items from FashionX and Zara brands
-# User Query: "Select all items from FashionX and Zara brands"
-# SQL: SELECT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' OR im.brand = 'Zara'
-
-# Example 4: Select all items from T-Shirt department and Casuals class
-# User Query: "Select all items from T-Shirt department and Casuals class"
-# SQL: SELECT im.itemId FROM itemmaster im WHERE im.itemDepartment LIKE 'T-Shirt%' AND im.itemClass LIKE 'Casuals%'
-
-# Example 5: Complex request with irrelevant info
-# User Query: "Create a simple promotion offering 30% off all yellow items from the FashionX Brand in the T-Shirt Department, valid from 17/04/2025 until the end of May 2025."
-# SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' AND im.itemDepartment LIKE 'T-Shirt%' AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Yellow'))
-# """),
-#         ("human", "Convert this question to a SQL SELECT query:\n\n```text\n{user_query}\n```")
-#     ])
-
-#     # Create the generation chain (Prompt -> LLM -> String Output)
-#     sql_generation_chain = sql_generation_prompt | sql_generator_llm | StrOutputParser()
-
-#     generated_sql = None # Default to None
-#     try:
-#         # Limit input text length (optional)
-#         max_len = 2000
-#         truncated_query = user_query[:max_len] + ("..." if len(user_query) > max_len else "")
-
-#         print(f"--- Generating SQL for: '{truncated_query}' ---")
-#         llm_output = await sql_generation_chain.ainvoke({"user_query": truncated_query})
-
-#         # Basic validation and cleaning
-#         cleaned_sql = llm_output.strip().strip(';').strip()
-
-#         # *** START FIX: Add missing closing parenthesis for EXISTS groups ***
-#         # Check if the query uses the specific pattern ' AND (EXISTS ...' and lacks the closing parenthesis
-#         # Use case-insensitive check for robustness
-#         pattern_start_exists = " AND (EXISTS ("
-#         if pattern_start_exists.lower() in cleaned_sql.lower() and not cleaned_sql.endswith(")"):
-#              # Check if the number of opening parentheses is one more than closing ones
-#              # This is a slightly more robust check than just checking the end
-#              if cleaned_sql.count("(") == cleaned_sql.count(")") + 1:
-#                  print("--- Post-processing: Adding missing closing parenthesis for EXISTS group. ---")
-#                  cleaned_sql += ")"
-#         # *** END FIX ***
-
-#         if not cleaned_sql:
-#             print("--- Generation failed: LLM returned empty string. ---")
-#         elif "cannot be answered" in cleaned_sql.lower():
-#             print(f"--- LLM indicated query cannot be answered: {cleaned_sql} ---")
-#         elif cleaned_sql.lower().startswith("select"):
-#             # Further check for potentially harmful keywords (basic protection)
-#             harmful_keywords = ['update ', 'insert ', 'delete ', 'drop ', 'alter ', 'truncate ']
-#             if any(keyword in cleaned_sql.lower() for keyword in harmful_keywords):
-#                 print(f"--- Generation failed: Potentially harmful non-SELECT keyword detected: {cleaned_sql} ---")
-#             else:
-#                 print(f"--- SQL Generation Successful (after potential fix): {cleaned_sql} ---")
-#                 generated_sql = cleaned_sql # Assign the potentially fixed SQL
-#         else:
-#             print(f"--- Generation failed: Output does not start with SELECT: {cleaned_sql} ---")
-
-#     except Exception as e:
-#         print(f"!!! ERROR during SQL generation: {e} !!!")
-#         traceback.print_exc()
-#         # Keep generated_sql as None
-
-#     return {"generated_sql": generated_sql}
 
 
 async def generate_sql(state: GraphState) -> Dict:
@@ -977,264 +823,6 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
     # The client stream is handled by astream_events processing the same LLM call
     return {"llm_response_content": final_content, "messages": [response_message]}
 
-# async def extract_details(state: GraphState) -> Dict:
-#     """
-#     Node to extract structured details from the final LLM response content.
-#     This happens server-side after the response is generated.
-#     """
-#     print("--- Node: extract_details ---")
-#     response_text = state.get("llm_response_content")
-#     extracted_data: Optional[ExtractedPromotionDetails] = None # Default
-
-#     if not response_text:
-#         print("--- No LLM response text found for extraction. Skipping. ---")
-#         return {"extracted_details": None}
-
-#     # Simple instruction for the extractor LLM
-#     today = datetime.datetime.now().strftime("%d/%m/%Y")
-#     extraction_prompt = ChatPromptTemplate.from_messages([
-#         ("system", f"""
-# You are an expert extraction system. Analyze the provided text, which is a response from a promotion creation assistant summarizing the current state of a promotion or answering a query. Extract the promotion details mentioned into the structured format defined by the 'ExtractedPromotionDetails' function/tool.
-
-# - Today's date is {today}. Use this ONLY if needed to interpret relative dates mentioned IN THE TEXT (like "starts tomorrow"), standardizing to dd/mm/yyyy.
-# - Standardize date formats found in the text to dd/mm/yyyy.
-# - Extract lists for items, excluded items, stores, excluded stores.
-# - If a field is explicitly mentioned as 'Missing' or not present in the text, leave its value as null or empty list.
-# - Focus *only* on the details present in the text. Do not infer or add information not explicitly stated.
-# """),
-#         ("human", "Extract promotion details from this text:\n\n```text\n{text_to_extract}\n```")
-#     ])
-
-#     # Create the extraction chain
-#     extraction_chain = extraction_prompt | extractor_llm_structured
-
-#     try:
-#         # Limit input text length for safety/cost
-#         max_len = 8000
-#         truncated_text = response_text[:max_len] + ("..." if len(response_text) > max_len else "")
-
-#         print(f"--- Extracting details from: '{truncated_text[:200]}...' ---")
-#         llm_extracted_data = await extraction_chain.ainvoke({"text_to_extract": truncated_text})
-
-#         if llm_extracted_data and isinstance(llm_extracted_data, ExtractedPromotionDetails):
-#             print("--- Extraction Successful ---")
-#             extracted_data = llm_extracted_data
-#             print(f"Extracted Data: {extracted_data.model_dump_json(indent=2)}") # Log extracted data
-#         elif llm_extracted_data:
-#              print(f"--- Extraction returned unexpected type: {type(llm_extracted_data)} ---")
-#         else:
-#             print("--- Extraction returned no data. ---")
-        
-
-#     except Exception as e:
-#         print(f"!!! ERROR during detail extraction: {e} !!!")
-#         traceback.print_exc()
-#         # Keep extracted_data as None
-
-#     return {"extracted_details": extracted_data}
-
-
-
-# async def extract_details(state: GraphState) -> Dict:
-#     """
-#     Node to extract structured promotion details and user intent from the conversation so far.
-#     Returns a dict with:
-#       - "extracted_details": ExtractedPromotionDetails or None on failure
-#       - "user_intent": UserIntent or None on failure
-#     """
-#     print("--- Node: extract_details ---")
-#     extracted_data: Optional[ExtractedPromotionDetails] = None
-#     user_intent: Optional[UserIntent] = None
-
-#     # 1. Build chat_history string from state['messages']
-#     chat_history_lines: List[str] = []
-#     for msg in state.get("messages", []):
-#         if isinstance(msg, HumanMessage):
-#             chat_history_lines.append(f"User: {msg.content}")
-#         elif isinstance(msg, AIMessage):
-#             chat_history_lines.append(f"Bot: {msg.content}")
-#         else:
-#             # Other message types (ToolMessage, SystemMessage) can be included or skipped.
-#             # For clarity, we skip or treat ToolMessage as Bot.
-#             if hasattr(msg, "content"):
-#                 chat_history_lines.append(f"Bot: {msg.content}")
-#     chat_history_str = "\n".join(chat_history_lines)
-
-#     # 2. Determine missing fields based on any previously extracted details
-#     prev: Optional[ExtractedPromotionDetails] = state.get("extracted_details")
-#     missing_fields: List[str] = []
-
-#     # Required fields: promotion_type, hierarchy_type & hierarchy_value, brand, items, discount_type & discount_value, start_date, end_date, stores.
-#     if prev is None or not prev.promotion_type:
-#         missing_fields.append("Promotion Type")
-#     # Hierarchy: requires both type and value
-#     if prev is None or not prev.hierarchy_type:
-#         missing_fields.append("Hierarchy Level Type")
-#     if prev is None or not prev.hierarchy_value:
-#         missing_fields.append("Hierarchy Level Value")
-#     if prev is None or not prev.brand:
-#         missing_fields.append("Brand")
-#     # Items: require at least one item or a natural-language instruction that can be expanded to items
-#     if prev is None or not prev.items:
-#         missing_fields.append("Items")
-#     # Discount
-#     if prev is None or not prev.discount_type:
-#         missing_fields.append("Discount Type")
-#     if prev is None or not prev.discount_value:
-#         missing_fields.append("Discount Value")
-#     # Dates
-#     if prev is None or not prev.start_date:
-#         missing_fields.append("Start Date")
-#     if prev is None or not prev.end_date:
-#         missing_fields.append("End Date")
-#     # Stores
-#     if prev is None or not prev.stores:
-#         missing_fields.append("Stores")
-#     # Note: excluded_items and excluded_stores are optional; we do not require them here.
-
-#     missing_fields_str = ""
-#     if missing_fields:
-#         # Format as bullet list
-#         missing_fields_str = "\n".join(f"- {fld}" for fld in missing_fields)
-#     else:
-#         missing_fields_str = "None"
-
-#     # 3. Fill in the prompt template
-#     # Compute current date in dd/mm/yyyy
-#     current_date = datetime.date.today().strftime("%d/%m/%Y")
-
-#     # The template uses {current_date}, {{chat_history}}, {{missing_fields}}.
-#     # We do a simple replace. Be careful that the template indeed contains these placeholders exactly.
-#     try:
-#         prompt_filled = template_Promotion_without_date \
-#             .replace("{current_date}", current_date) \
-#             .replace("{{chat_history}}", chat_history_str) \
-#             .replace("{{missing_fields}}", missing_fields_str)
-#     except Exception as e:
-#         print(f"Error formatting template_Promotion_without_date: {e}")
-#         prompt_filled = template_Promotion_without_date
-#         # Fallback: we could still proceed, but chat_history/missing_fields won't be in prompt.
-
-#     # 4. Invoke the structured extraction LLM to parse promotion details
-#     try:
-#         # Build a ChatPromptTemplate without further variables since prompt is already filled
-#         detail_prompt = ChatPromptTemplate.from_messages([
-#             ("system", prompt_filled)
-#         ])
-#         # Use the structured chain
-#         llm_result = await (detail_prompt | extractor_llm_structured).ainvoke({})
-#         # llm_result should be an ExtractedPromotionDetails instance
-#         if isinstance(llm_result, ExtractedPromotionDetails):
-#             extracted_data = llm_result
-#             # print("Extracted Data: ",llm_result)
-#         else:
-#             print("--- Warning: extract_details: LLM returned unexpected type:", type(llm_result))
-#     except Exception as e:
-#         print(f"!!! ERROR during promotion detail extraction: {e} !!!")
-#         traceback.print_exc()
-
-#     # 5. Extract user intent from last bot/user turn
-#     try:
-#         last_bot_message = None
-#         current_user_message = None
-#         current_bot_message = None
-
-#         # Collect only Human and AI messages
-#         relevant_msgs = [msg for msg in state.get("messages", []) if isinstance(msg, (HumanMessage, AIMessage))]
-
-#         # Separate Human and AI messages
-#         human_msgs = [msg for msg in relevant_msgs if isinstance(msg, HumanMessage)]
-#         ai_msgs = [msg for msg in relevant_msgs if isinstance(msg, AIMessage)]
-
-#         # Last bot message: 2nd-last AI message
-#         if len(ai_msgs) >= 2:
-#             last_bot_message = ai_msgs[-2].content
-
-#         # Current user message: last Human message
-#         if human_msgs:
-#             current_user_message = human_msgs[-1].content
-
-#         # Current bot message: last AI message
-#         if ai_msgs:
-#             current_bot_message = ai_msgs[-1].content
-
-#         # Fallback if not enough data
-#         last_bot_message = last_bot_message or ""
-#         current_user_message = current_user_message or ""
-#         current_bot_message = current_bot_message or ""
-
-#         # Build a complete context string
-#         full_context = f"""Previous Bot: {last_bot_message}
-#     Current User: {current_user_message}
-#     Current Bot: {current_bot_message}"""
-
-#         intent_system = (
-#             "You are a highly reliable intent classification engine for a promotions chatbot.\n"
-#             "**Your job**: Given three lines of context—“Previous Bot,” “Current User,” and “Current Bot”—decide which of these four intents the user is expressing _right now_:\n\n"
-#             "  1. **Promotion Creation**  \n"
-#             "     The user is explicitly initiating a brand-new promotion.  \n"
-#             "     *Trigger phrases* include “I want to create a promotion,” “Let's make a promo,” “Start a new discount,” etc.\n\n"
-#             "  2. **Submission**  \n"
-#             # "     The user is confirming final submission _and_ the bot has just acknowledged success.  \n"
-#             # "     **Strict Rule:** Previous Bot must have asked “Would you like to submit this information?”,\n"
-#             # "     Current User must reply with a confirmation (“Yes”/“Sure”/“Okay” etc.),\n"
-#             # "     **and** Current Bot must be a success message containing “Promotion created successfully. Thank you for choosing us.”\n\n"
-#             "     - The user has just confirmed submission **AND** the bot has immediately replied with a success message.\n"
-#             "     - **Strict rule**: \n"
-#             "         • Current User must be a confirmation (e.g. “Yes”, “Sure”, “Okay”).  \n"
-#             "         • Current Bot must contain exactly “Promotion created successfully. Thank you for choosing us.”  \n\n"
-#             "  3. **Detail Filling**  \n"
-#             "     The user is providing or updating one or more promotion fields (e.g. “Promotion Type: Simple,” “Brand: H&M,” “Discount: 20%,” “Start: 01/07/2025”), or answering intermediate questions about stores/items.\n\n"
-#             "  4. **Other**  \n"
-#             "     Anything that doesn't fit the above: greetings, small talk, help requests, mistakes, etc.\n\n"
-#             "**Rules (in order)**:\n"
-#             "  1. If the **Current User** line matches a _new promotion request_ pattern, return intent=\"Promotion Creation\".  Stop.\n"
-#             "  2. Else if the Submission strict rule applies (Previous Bot asked for submission, Current User confirms, Current Bot gives a success message), return intent=\"Submission\".\n"
-#             "  3. Else if **Current User** mentions any of the required fields—Type, Hierarchy, Brand, Items, Discount, Dates, or Stores—return intent=\"Detail Filling\".  Stop.\n"
-#             "  4. Otherwise, return intent=\"Other\".\n\n"
-#             "**Example Inputs → Outputs**:\n"
-#             "```\n"
-#             "Previous Bot: (nothing yet)\n"
-#             "Current User: I want to create a promotion\n"
-#             "Current Bot: To create a promotion, I need these details…\n"
-#             "→ {{\"intent\": \"Promotion Creation\"}}\n\n"
-#             "Previous Bot: Would you like to submit this information?\n"
-#             "Current User: Yes\n"
-#             "Current Bot: Promotion created successfully. Thank you for choosing us.\n"
-#             "→ {{\"intent\": \"Submission\"}}\n\n"
-#             "Previous Bot: Promotion Type: Simple\n"
-#             "Current User: Brand: Zara and H&M\n"
-#             "Current Bot: Recorded Brand: Zara, H&M. Missing fields: Items, Discount, Dates, Stores.\n"
-#             "→ {{\"intent\": \"Detail Filling\"}}\n"
-#             "```\n\n"
-#             "**Return exactly** a JSON object with one key: `intent`, whose value is one of:\n"
-#             "  [\"Promotion Creation\", \"Detail Filling\", \"Submission\", \"Other\"]\n"
-#         )
-#         intent_prompt = ChatPromptTemplate.from_messages([
-#             ("system", intent_system),
-#             ("human", "{context}")
-#         ])
-
-#         llm_intent = await (intent_prompt | intent_extractor_llm_structured).ainvoke({
-#             "context": full_context
-#         })
-
-#         print("Predicted user intent:", llm_intent)
-
-#         if isinstance(llm_intent, UserIntent):
-#             user_intent = llm_intent
-
-#     except Exception as e:
-#         print(f"!!! ERROR during intent extraction: {e} !!!")
-#         traceback.print_exc()
-
-#         # Return results
-#     return {
-#         "extracted_details": extracted_data,
-#         "user_intent": user_intent
-#     }
-
-#Uncomment above extract_details to replace the existing one
 from fastapi.encoders import jsonable_encoder
 
 def _to_plain(obj):
@@ -1260,73 +848,6 @@ def _to_plain(obj):
         return jsonable_encoder(obj)
     except Exception:
         return str(obj)
-
-# intent_system = (
-#     "You are a highly reliable intent classification engine for a promotions chatbot.\n"
-#     "**Your job**: Given three lines of context—“Previous Bot,” “Current User,” and “Current Bot”—decide which of these intents the user is expressing _right now_:\n\n"
-#     "  1. **Promotion Creation**  \n"
-#     "     The user is explicitly initiating a brand-new promotion.  \n"
-#     "     *Trigger phrases* include “I want to create a promotion,” “Let's make a promo,” “Start a new discount,” etc.\n\n"
-#     "  2. **Submission**  \n"
-#     "     Submission intent is recognized through the following steps (Strict) :\n"
-#     "       Step 1: The bot asks the user for confirmation to submit the promotion (e.g., 'Would you like to submit this information?').\n"
-#     "       Step 2: The user provides confirmation (e.g., 'Yes', 'Sure', 'Okay').\n"
-#     "       Step 3: The bot replies with a success message (e.g., 'Promotion created successfully. Thank you for choosing us.').\n"
-#     "     If these steps occur in sequence, classify the intent as \"Submission\".\n\n"
-#     "     Example conversation:\n"
-#     "       Previous Bot: Would you like to submit this information?\n"
-#     "       Current User: Yes\n"
-#     "       Current Bot: Promotion created successfully. Thank you for choosing us.\n"
-#     "       →'{{\"intent\: \"Submission\"}}' \n\n"
-
-#     "  3. **Detail Filling**  \n"
-#     "     The user is providing or updating one or more promotion fields (e.g. “Promotion Type: Simple,” “Brand: H&M,” “Discount: 20%,” “Start: 01/07/2025”), or answering intermediate questions about stores/items.\n\n"
-#     "  4. **Email Fetching**  \n"
-#     "     Email Fetching intent is recognized through the following steps:\n"
-#     "       Step 1: After the user confirms submission and the bot replies with a success message, the bot asks if the user wants the promotion document sent to their email address (e.g., 'Would you like the promotion document sent to your email?').\n"
-#     "       Step 2: The user provides confirmation (e.g., 'Yes', 'Please send it to my email') or the user provides confirmation along with the email address (e.g., 'Yes, my email is user@example.com').\n"
-#     "       Step 3: The bot asks the user for their email address if the user hasn't provided it (e.g., 'Please provide your email address.').\n"
-#     "       Step 4: The user provides their email address (e.g., 'My email is user@example.com').\n"
-#     "     If these steps occur in sequence, classify the intent as \"Email Fetching\".\n\n"
-#     "     Example conversation:\n"
-#     "       Previous Bot: Would you like the promotion document sent to your email?\n"
-#     "       Current User: Yes\n"
-#     "       Current Bot: Please provide your email address.\n"
-#     "       Current User: My email is user@example.com\n"
-#     "       →{{\"intent\": \"Email Fetching\"}}\n\n"
-#     "  5. **Other**  \n"
-#     "     Anything that doesn't fit the above: greetings, small talk, help requests, mistakes, etc.\n\n"
-#     "**Rules (in order)**:\n"
-#     "  1. If the **Current User** line matches a _new promotion request_ pattern, return intent=\"Promotion Creation\".  Stop.\n"
-#     "  2. Else if the Submission strict rule applies (Previous Bot asked for submission, Current User confirms, Current Bot gives a success message), return intent=\"Submission\".\n"
-#     "  3. Else if the Email Fetching steps occur in sequence, return intent=\"Email Fetching\".\n"
-#     "  4. Else if **Current User** mentions any of the required fields—Type, Hierarchy, Brand, Items, Discount, Dates, or Stores—return intent=\"Detail Filling\".  Stop.\n"
-#     "  5. Otherwise, return intent=\"Other\".\n\n"
-#     "**Example Inputs → Outputs**:\n"
-#     "```\n"
-#     "Previous Bot: (nothing yet)\n"
-#     "Current User: I want to create a promotion\n"
-#     "Current Bot: To create a promotion, I need these details…\n"
-#     "→'{{\"intent\: \"Promotion Creation\"}}' \n\n"
-#     "Previous Bot: Would you like to submit this information?\n"
-#     "Current User: Yes\n"
-#     "Current Bot: Promotion created successfully. Thank you for choosing us.\n"
-#     "→'{{\"intent\: \"Submission\"}}' \n\n"
-#     "Previous Bot: Promotion Type: Simple\n"
-#     "Current User: Brand: Zara and H&M\n"
-#     "Current Bot: Recorded Brand: Zara, H&M. Missing fields: Items, Discount, Dates, Stores.\n"
-#     "→'{{\"intent\: \"Detail Filling\"}}' \n\n"
-
-#     "Previous Bot: Would you like the promotion document sent to your email?\n"
-#     "Current User: Yes\n"
-#     "Current Bot: Please provide your email address.\n"
-#     "Current User: My email is user@example.com\n"
-#     "→'{{\"intent\": \"Email Fetching\"}}'\n"
-
-#     "```\n\n"
-#     "**Return exactly** a JSON object with one key: `intent`, whose value is one of:\n"
-#     "  [\"Promotion Creation\", \"Detail Filling\", \"Submission\", \"Email Fetching\", \"Other\"]\n"
-# )
 
 intent_system = (
     "You are a highly reliable intent classification engine for a promotions chatbot.\n"
@@ -1641,52 +1162,245 @@ workflow.add_conditional_edges(
 memory = MemorySaver()
 app_runnable_promotion_agentic = workflow.compile(checkpointer=memory)
 
-# --- API Request Model ---
-async def stream_response_generator_promotion(
-    graph_stream: AsyncIterator[Dict]
-) -> AsyncIterator[str]:
+# # --- API Request Model ---
+# async def stream_response_generator_promotion(
+#     graph_stream: AsyncIterator[Dict]
+# ) -> AsyncIterator[str]:
+#     """
+#     Asynchronously streams LLM response chunks from specified nodes
+#     to the client as soon as they arrive.
+#     """
+#     print("--- STREAM GENERATOR (for client) STARTED ---")
+#     full_response_for_log = ""
+#     try:
+#         async for event in graph_stream:
+#             if event["event"] == "on_chat_model_stream":
+#                 metadata = event.get("metadata", {})
+#                 node_name = metadata.get("langgraph_node")
+#                 if node_name in {"generate_direct_response", "generate_response_from_sql"}:
+#                     chunk = event["data"].get("chunk")
+#                     if isinstance(chunk, AIMessageChunk) and chunk.content:
+#                         content = chunk.content
+#                         full_response_for_log += content
+#                         yield content
+#             elif event["event"] == "on_node_end" and node == "extract_details":
+#                 output = event["data"]["output"] or {}
+#                 # Safely serialize any dates or Pydantic models
+#                 payload = {
+#                     "extracted_details": getattr(output, "extracted_details", None),
+#                     "user_intent": getattr(output, "user_intent", None),
+#                 }
+#                 # Convert Pydantic objects to dicts if needed
+#                 if hasattr(payload["extracted_details"], "dict"):
+#                     payload["extracted_details"] = payload["extracted_details"].dict()
+#                 if hasattr(payload["user_intent"], "dict"):
+#                     payload["user_intent"] = payload["user_intent"].dict()
+#                 # SSE custom event
+#                 yield (
+#                     "event: extracted_details\n"
+#                     f"data: {json.dumps(payload, default=str)}\n\n"
+#                 )
+#     except Exception as e:
+#         print(f"!!! ERROR in stream_response_generator_promotion: {e} !!!")
+#         # If nothing has been sent yet, at least send an error
+#         yield f"\n\nStream error: {e}"
+#     finally:
+#         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
+#         # For debugging, you could log full_response_for_log here
+
+# Connection manager to handle multiple WebSocket connections
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, websocket: WebSocket, thread_id: str):
+        await websocket.accept()
+        self.active_connections[thread_id] = websocket
+        print(f"WebSocket connected for thread: {thread_id}")
+
+    def disconnect(self, thread_id: str):
+        if thread_id in self.active_connections:
+            del self.active_connections[thread_id]
+            print(f"WebSocket disconnected for thread: {thread_id}")
+
+    async def send_message(self, message: dict, thread_id: str):
+        if thread_id in self.active_connections:
+            await self.active_connections[thread_id].send_json(message)
+
+    async def send_text(self, text: str, thread_id: str):
+        if thread_id in self.active_connections:
+            await self.active_connections[thread_id].send_text(text)
+
+manager = ConnectionManager()
+
+# Modified stream generator for WebSocket
+async def stream_response_generator_websocket(
+    graph_stream: AsyncIterator[Dict],
+    websocket: WebSocket,
+    thread_id: str
+) -> None:
     """
-    Asynchronously streams LLM response chunks from specified nodes
-    to the client as soon as they arrive.
+    Streams LLM response chunks to WebSocket client with structured events.
     """
-    print("--- STREAM GENERATOR (for client) STARTED ---")
+    print(f"--- WEBSOCKET STREAM GENERATOR STARTED for thread: {thread_id} ---")
     full_response_for_log = ""
+    
     try:
         async for event in graph_stream:
+            # Stream text chunks
             if event["event"] == "on_chat_model_stream":
                 metadata = event.get("metadata", {})
                 node_name = metadata.get("langgraph_node")
+                
                 if node_name in {"generate_direct_response", "generate_response_from_sql"}:
                     chunk = event["data"].get("chunk")
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         content = chunk.content
                         full_response_for_log += content
-                        yield content
-            elif event["event"] == "on_node_end" and node == "extract_details":
-                output = event["data"]["output"] or {}
-                # Safely serialize any dates or Pydantic models
+                        
+                        # Send as structured message
+                        await manager.send_message({
+                            "type": "stream_chunk",
+                            "content": content,
+                            "node": node_name
+                        }, thread_id)
+            
+            # Send extracted details when available
+            elif event["event"] == "on_node_end" and event.get("name") == "extract_details":
+                output = event["data"].get("output", {})
+                
+                # Safely serialize extracted details
+                extracted_details = output.get("extracted_details")
+                user_intent = output.get("user_intent")
+                
                 payload = {
-                    "extracted_details": getattr(output, "extracted_details", None),
-                    "user_intent": getattr(output, "user_intent", None),
+                    "type": "extracted_details",
+                    "extracted_details": _to_plain(extracted_details) if extracted_details else None,
+                    "user_intent": _to_plain(user_intent) if user_intent else None,
                 }
-                # Convert Pydantic objects to dicts if needed
-                if hasattr(payload["extracted_details"], "dict"):
-                    payload["extracted_details"] = payload["extracted_details"].dict()
-                if hasattr(payload["user_intent"], "dict"):
-                    payload["user_intent"] = payload["user_intent"].dict()
-                # SSE custom event
-                yield (
-                    "event: extracted_details\n"
-                    f"data: {json.dumps(payload, default=str)}\n\n"
-                )
+                
+                await manager.send_message(payload, thread_id)
+                print(f"Sent extracted details: {payload}")
+        
+        # Send completion signal
+        await manager.send_message({
+            "type": "stream_complete",
+            "full_response": full_response_for_log
+        }, thread_id)
+        
     except Exception as e:
-        print(f"!!! ERROR in stream_response_generator_promotion: {e} !!!")
-        # If nothing has been sent yet, at least send an error
-        yield f"\n\nStream error: {e}"
+        print(f"!!! ERROR in websocket stream generator: {e} !!!")
+        traceback.print_exc()
+        
+        await manager.send_message({
+            "type": "error",
+            "message": str(e)
+        }, thread_id)
+    
     finally:
-        print(f"--- STREAM GENERATOR (for client) FINISHED ---")
-        # For debugging, you could log full_response_for_log here
+        print(f"--- WEBSOCKET STREAM GENERATOR FINISHED for thread: {thread_id} ---")
 
+app = FastAPI(
+    title="LangGraph Chatbot API",
+    description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
+)
+# WebSocket endpoint (replace your POST endpoint)
+@app.websocket("/ws/promotion_chat/{thread_id}")
+async def websocket_promotion_chat(websocket: WebSocket, thread_id: str):
+    """
+    WebSocket endpoint for promotion chat with agentic capabilities.
+    
+    Expected message format from client:
+    {
+        "type": "message",
+        "content": "user message text",
+        "thread_id": "optional-override"
+    }
+    
+    Response format:
+    {
+        "type": "stream_chunk" | "extracted_details" | "stream_complete" | "error",
+        "content": "...",  // for stream_chunk
+        "extracted_details": {...},  // for extracted_details
+        "user_intent": {...},  // for extracted_details
+        "message": "..."  // for error
+    }
+    """
+    await manager.connect(websocket, thread_id)
+    config = {"configurable": {"thread_id": thread_id}}
+    
+    try:
+        while True:
+            # Receive message from client
+            data = await websocket.receive_json()
+            print(f"\n--- [Thread: {thread_id}] Received WebSocket message: {data} ---")
+            
+            message_type = data.get("type")
+            
+            if message_type == "message":
+                user_message = data.get("content", "")
+                
+                if not user_message.strip():
+                    await manager.send_message({
+                        "type": "error",
+                        "message": "Empty message received"
+                    }, thread_id)
+                    continue
+                
+                # Send acknowledgment
+                await manager.send_message({
+                    "type": "ack",
+                    "message": "Processing your request..."
+                }, thread_id)
+                
+                # Prepare input for graph
+                input_message = HumanMessage(content=user_message)
+                input_state = {"messages": [input_message]}
+                
+                try:
+                    # Stream graph execution
+                    graph_stream = app_runnable_promotion_agentic.astream_events(
+                        input_state, 
+                        config,
+                        version="v1"
+                    )
+                    
+                    # Process and stream results
+                    await stream_response_generator_websocket(
+                        graph_stream,
+                        websocket,
+                        thread_id
+                    )
+                    
+                except Exception as graph_error:
+                    print(f"!!! ERROR in graph execution: {graph_error} !!!")
+                    traceback.print_exc()
+                    
+                    await manager.send_message({
+                        "type": "error",
+                        "message": f"Error processing request: {str(graph_error)}"
+                    }, thread_id)
+            
+            elif message_type == "ping":
+                # Heartbeat mechanism
+                await manager.send_message({
+                    "type": "pong"
+                }, thread_id)
+            
+            else:
+                await manager.send_message({
+                    "type": "error",
+                    "message": f"Unknown message type: {message_type}"
+                }, thread_id)
+    
+    except WebSocketDisconnect:
+        manager.disconnect(thread_id)
+        print(f"Client disconnected: {thread_id}")
+    
+    except Exception as e:
+        print(f"!!! WebSocket error for thread {thread_id}: {e} !!!")
+        traceback.print_exc()
+        manager.disconnect(thread_id)
 
 # --- FastAPI Application ---
 app = FastAPI(
