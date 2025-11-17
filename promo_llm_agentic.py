@@ -136,9 +136,10 @@ print(f"LangSmith project: {os.getenv('LANGCHAIN_PROJECT')}")
 
 class ExtractedPromotionDetails(BaseModel):
     promotion_type: str | None = Field(None, validation_alias=AliasChoices('Promotion Type', 'promotion_type'))
-    hierarchy_type: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Hierarchy Type', 'hierarchy_type'))
-    hierarchy_value: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Hierarchy Value', 'hierarchy_value'))
-    brand: List[str] = Field(default_factory=list, validation_alias=AliasChoices('Brand', 'brand'))
+
+    hierarchy_type: List[str] | None = Field(default=None, validation_alias=AliasChoices('Hierarchy Type', 'hierarchy_type'))
+    hierarchy_value: List[str] | None = Field(default=None, validation_alias=AliasChoices('Hierarchy Value', 'hierarchy_value'))
+    brand: List[str] | None = Field(default=None, validation_alias=AliasChoices('Brand', 'brand'))
     
     # Changed: Allow None or List
     items: List[str] | None = Field(default=None, validation_alias=AliasChoices('Items', 'items'))

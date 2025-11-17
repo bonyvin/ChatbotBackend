@@ -1,4 +1,5 @@
 # --- FastAPI Application ---
+import asyncio
 import json
 import logging
 import traceback
@@ -46,6 +47,298 @@ app = FastAPI(
     title="LangGraph Chatbot API",
     description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
 )
+
+# WebSocket endpoint
+# @app.websocket("/ws/promotion_chat")
+# async def websocket_promotion_chat(websocket: WebSocket):
+#     """
+#     WebSocket version of your /promotion_chat endpoint.
+
+#     - Client should open WS to /ws/promotion_chat
+#     - Client sends a single JSON message to start a run, e.g.:
+#         { "message": "Hello", "thread_id": "<optional-thread-id>" }
+#       (thread_id optional; server will generate one if not provided)
+#     - Server will iterate the async graph_stream produced by
+#       app_runnable_promotion.astream_events(input_state, config)
+#       and send JSON messages for each event.
+#     - Message shapes sent to client:
+#         { "type": "event", "event": <name|null>, "data": <payload> }
+#         { "type": "token", "text": "..." }   # when event data is a token/string
+#         { "type": "done", "thread_id": "..." }
+#         { "type": "error", "detail": "..." }
+#     - Client may send further messages (new runs) on the same WS connection.
+#     """
+    
+#     def make_serializable(obj):
+#         """Convert LangChain objects to JSON-serializable format."""
+#         if isinstance(obj, (str, int, float, bool, type(None))):
+#             return obj
+#         elif isinstance(obj, dict):
+#             return {k: make_serializable(v) for k, v in obj.items()}
+#         elif isinstance(obj, (list, tuple)):
+#             return [make_serializable(item) for item in obj]
+#         elif hasattr(obj, 'content'):  # HumanMessage, AIMessage, etc.
+#             return {"content": obj.content, "type": obj.__class__.__name__}
+#         elif hasattr(obj, 'dict'):  # Pydantic models
+#             return obj.dict()
+#         elif hasattr(obj, '__dict__'):
+#             return make_serializable(obj.__dict__)
+#         else:
+#             return str(obj)
+    
+#     await websocket.accept()
+#     try:
+#         while True:
+#             # Wait for the client to send a JSON start message
+#             raw = await websocket.receive_text()
+#             try:
+#                 payload = json.loads(raw)
+#             except Exception:
+#                 await websocket.send_text(json.dumps({
+#                     "type": "error",
+#                     "detail": "Invalid JSON received. Expecting { message, thread_id? }"
+#                 }))
+#                 continue
+
+#             user_message = payload.get("message", "")
+#             thread_id = payload.get("thread_id") or str(uuid.uuid4())
+#             config = {"configurable": {"thread_id": thread_id}}
+#             print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+
+#             # build same input_state as before
+#             input_message = HumanMessage(content=user_message)
+#             input_state = {"messages": [input_message]}
+
+#             try:
+#                 # get async iterator from your graph runner
+#                 graph_stream = app_runnable_promotion.astream_events(input_state, config, version="v2")
+#                 print(f"\n--- Graph stream: {graph_stream} ---")
+
+#                 # iterate and forward events to websocket client
+#                 async for evt in graph_stream:
+#                     try:
+#                         # Check event kind/type to handle streaming tokens
+#                         event_kind = evt.get("event") if isinstance(evt, dict) else None
+                        
+#                         # Handle streaming tokens from LLM
+#                         if event_kind == "on_chat_model_stream":
+#                             # Extract token/chunk from the event
+#                             chunk_data = evt.get("data", {})
+#                             chunk = chunk_data.get("chunk")
+                            
+#                             if chunk and hasattr(chunk, 'content'):
+#                                 token_text = chunk.content
+#                                 if token_text:
+#                                     await websocket.send_text(json.dumps({
+#                                         "type": "token",
+#                                         "text": token_text
+#                                     }))
+                        
+#                         # Handle other events (start, end, etc.)
+#                         elif event_kind in ["on_chain_start", "on_chain_end", "on_tool_start", "on_tool_end"]:
+#                             # These are structural events, optionally send them
+#                             serializable_evt = make_serializable(evt)
+#                             await websocket.send_text(json.dumps({
+#                                 "type": "event",
+#                                 "event": event_kind,
+#                                 "data": serializable_evt
+#                             }))
+                        
+#                         # Handle any other event types
+#                         elif isinstance(evt, dict):
+#                             serializable_evt = make_serializable(evt)
+#                             await websocket.send_text(json.dumps({
+#                                 "type": "event",
+#                                 "data": serializable_evt
+#                             }))
+#                         elif isinstance(evt, str):
+#                             # Plain string token
+#                             await websocket.send_text(json.dumps({
+#                                 "type": "token",
+#                                 "text": evt
+#                             }))
+#                         else:
+#                             # Try to serialize any other object type
+#                             serializable_evt = make_serializable(evt)
+#                             await websocket.send_text(json.dumps({
+#                                 "type": "event",
+#                                 "data": serializable_evt
+#                             }))
+                            
+#                     except WebSocketDisconnect:
+#                         raise
+#                     except Exception as send_exc:
+#                         print(f"Error sending event for thread {thread_id}: {send_exc}")
+#                         traceback.print_exc()
+#                         # Continue to next event
+
+#                 # finished streaming for this run
+#                 await websocket.send_text(json.dumps({"type": "done", "thread_id": thread_id}))
+
+#             except WebSocketDisconnect:
+#                 print(f"Client disconnected during stream (thread {thread_id})")
+#                 break
+#             except Exception as e:
+#                 print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
+#                 traceback.print_exc()
+#                 try:
+#                     await websocket.send_text(json.dumps({
+#                         "type": "error",
+#                         "detail": f"Error processing chat (thread {thread_id})."
+#                     }))
+#                 except Exception:
+#                     pass
+#                 continue
+
+#     except WebSocketDisconnect:
+#         print("WebSocket client disconnected")
+#     except Exception as outer_e:
+#         print("Unexpected error on websocket:", outer_e)
+#         traceback.print_exc()
+#     finally:
+#         try:
+#             await websocket.close()
+#         except Exception:
+#             pass
+
+@app.websocket("/ws/promotion_chat")
+async def websocket_promotion_chat(websocket: WebSocket):
+    """
+    WebSocket version of your /promotion_chat endpoint.
+    Streams only tokens from the 'generate_direct_response' node.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            # Wait for the client to send a JSON start message
+            raw = await websocket.receive_text()
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "detail": "Invalid JSON received. Expecting { message, thread_id? }"
+                }))
+                continue
+
+            user_message = payload.get("message", "")
+            thread_id = payload.get("thread_id") or str(uuid.uuid4())
+            config = {"configurable": {"thread_id": thread_id}}
+            print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+
+            # build same input_state as before
+            input_message = HumanMessage(content=user_message)
+            input_state = {"messages": [input_message]}
+
+            try:
+                # get async iterator from your graph runner
+                graph_stream = app_runnable_promotion.astream_events(
+                    input_state, 
+                    config, 
+                    version="v2"
+                )
+                print(f"\n--- Graph stream: {graph_stream} ---")
+
+                # Track if we're in the generate_direct_response node
+                in_direct_response_node = False
+
+                # iterate and forward events to websocket client
+                async for evt in graph_stream:
+                    try:
+                        if not isinstance(evt, dict):
+                            continue
+                        
+                        event_type = evt.get("event", "")
+                        event_name = evt.get("name", "")
+                        
+                        # Check if we're entering/exiting the generate_direct_response node
+                        if event_type == "on_chain_start" and "generate_direct_response" in event_name or "generate_response_from_sql" in event_name:
+                            in_direct_response_node = True
+                            print(f"[WS] Entering generate_direct_response node")
+                            continue
+                        
+                        if event_type == "on_chain_end" and "generate_direct_response" in event_name or "generate_response_from_sql" in event_name:
+                            in_direct_response_node = False
+                            print(f"[WS] Exiting generate_direct_response node")
+                            continue
+                        
+                        # Only stream tokens from generate_direct_response node
+                        if in_direct_response_node and event_type == "on_chat_model_stream":
+                            chunk_data = evt.get("data", {})
+                            chunk = chunk_data.get("chunk")
+                            
+                            if chunk and hasattr(chunk, 'content'):
+                                token_text = chunk.content
+                                if token_text:  # Only send non-empty tokens
+                                    await websocket.send_text(json.dumps({
+                                        "type": "token",
+                                        "text": token_text
+                                    }))
+                                    print(f"[WS] Streaming token: {repr(token_text)}")
+                            
+                    except WebSocketDisconnect:
+                        raise
+                    except Exception as send_exc:
+                        print(f"Error processing event for thread {thread_id}: {send_exc}")
+                        traceback.print_exc()
+
+                # finished streaming for this run
+                await websocket.send_text(json.dumps({"type": "done", "thread_id": thread_id}))
+                print(f"[WS] Stream complete for thread {thread_id}")
+
+            except WebSocketDisconnect:
+                print(f"Client disconnected during stream (thread {thread_id})")
+                break
+            except Exception as e:
+                print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
+                traceback.print_exc()
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "detail": f"Error processing chat (thread {thread_id})."
+                    }))
+                except Exception:
+                    pass
+                continue
+
+    except WebSocketDisconnect:
+        print("WebSocket client disconnected")
+    except Exception as outer_e:
+        print("Unexpected error on websocket:", outer_e)
+        traceback.print_exc()
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            data = json.loads(raw)
+            user_message = data.get("message", "")
+
+            # You can replace the block below with actual LLM streaming logic.
+            # For demo, we *simulate* streaming by chunking the reply and sending
+            # small pieces (tokens) with short sleeps in between.
+            reply = f"Bot reply to: {user_message}"
+
+            # Stream reply chunk-by-chunk
+            chunk_size = 12
+            for i in range(0, len(reply), chunk_size):
+                chunk = reply[i : i + chunk_size]
+                await websocket.send_text(json.dumps({"type": "token", "text": chunk}))
+                await asyncio.sleep(0.06)  # simulate latency / streaming
+
+            # Indicate message is complete
+            await websocket.send_text(json.dumps({"type": "done"}))
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
+        
 #Common Functions:
 #Email Functionality
 @app.post("/filenew")
