@@ -1111,31 +1111,52 @@ async def extract_details(state: GraphState) -> Dict:
 #     print("🔁 Missing details or incomplete flow. Continuing conversation.")
 #     return "preprocess_input"
 
+# def should_continue(state: GraphState) -> str:
+#     """
+#     Determines if the conversation should continue or end.
+#     """
+#     print("--- Condition: should_continue ---")
+    
+#     # Safer state access
+#     user_intent_obj = state.get("user_intent")
+#     user_intent = None
+    
+#     if user_intent_obj:
+#         # Handle both dict and object cases
+#         if isinstance(user_intent_obj, dict):
+#             user_intent = user_intent_obj.get("intent")
+#         elif hasattr(user_intent_obj, "intent"):
+#             user_intent = user_intent_obj.intent
+    
+#     print(f"Extracted intent value: {user_intent}")  # Debug print
+    
+#     if user_intent and user_intent.lower() == "submission":
+#         print("✅ User confirmed submission. Ending conversation.")
+#         return END
+    
+#     print("🔄 Missing details or incomplete flow. Continuing conversation.")
+#     return "preprocess_input"
+
 def should_continue(state: GraphState) -> str:
     """
     Determines if the conversation should continue or end.
     """
     print("--- Condition: should_continue ---")
-    
-    # Safer state access
-    user_intent_obj = state.get("user_intent")
     user_intent = None
-    
-    if user_intent_obj:
-        # Handle both dict and object cases
-        if isinstance(user_intent_obj, dict):
-            user_intent = user_intent_obj.get("intent")
-        elif hasattr(user_intent_obj, "intent"):
-            user_intent = user_intent_obj.intent
-    
-    print(f"Extracted intent value: {user_intent}")  # Debug print
-    
+
+    try:
+        user_intent = getattr(state.get("user_intent"), "intent", None)
+    except Exception as e:
+        print(f"Error reading state in should_continue: {e}")
+
     if user_intent and user_intent.lower() == "submission":
         print("✅ User confirmed submission. Ending conversation.")
         return END
-    
-    print("🔄 Missing details or incomplete flow. Continuing conversation.")
-    return "preprocess_input"
+
+    # Instead of looping back to preprocess_input, END here
+    # and wait for the next user message via WebSocket
+    print("🔄 Waiting for user response. Ending current turn.")
+    return END  # Changed from "preprocess_input"
 
 # --- Conditional Edges ---
 def should_execute_sql(state: GraphState) -> str:
