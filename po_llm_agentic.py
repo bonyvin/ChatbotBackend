@@ -1,22 +1,18 @@
 import datetime
 import os
-from platform import node
-import re
 import uuid
 import json
 import traceback # For detailed error logging
-from typing import Any, Dict, List, Optional, TypedDict, Annotated, Sequence, AsyncIterator,Set
+from typing import Dict, List, Optional, TypedDict, Annotated, Sequence, AsyncIterator
+
 import operator
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse # Import StreamingResponse
-from fastapi_mail import FastMail, MessageSchema, MessageType
-from pydantic import AliasChoices, BaseModel, EmailStr, Field
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse # Import StreamingResponse
+from pydantic import AliasChoices, BaseModel, EmailStr, Field,field_validator
 from dotenv import load_dotenv
 from sqlalchemy import text
 from requests import Session # Assuming Session is used within get_db
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import WebSocket, WebSocketDisconnect
-
 
 # LangChain and LangGraph imports
 from langchain_core.output_parsers import StrOutputParser
@@ -32,13 +28,12 @@ from langchain_core.messages import (
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
-from llm_templates import template_Promotion_without_date,promotion_extraction_prompt,item_database_table,promotion_intent_system
-# from promoUtils import template_Promotion_without_date
-from langchain_core.tools import tool
-from send_email import conf 
-from sqlalchemy import text, inspect
-from sqlalchemy.exc import SQLAlchemyError
+from llm_templates import template_PO_without_date,po_database_schema,po_extraction_prompt,purchase_order_intent_system
+from llm_extractors import UserIntent,intent_extractor_llm_structured
 from fastapi.encoders import jsonable_encoder
+
+# from promoUtils import template_Promotion_without_date
+
 # Assuming database.py and llm_templates.py are in the same directory or accessible
 # Mock these if they are not available in the execution environment
 try:
@@ -101,49 +96,188 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
+    # Fallback for environments where .env might not be present (e.g., online platforms)
+    # You might need to set this manually or through platform secrets
     OPENAI_API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual key if needed
     if OPENAI_API_KEY == "YOUR_API_KEY_HERE":
          print("Warning: OPENAI_API_KEY not found in environment variables or .env. Using placeholder.")
-
+         # Consider raising an error if the key is essential:
+         # raise ValueError("OPENAI_API_KEY environment variable not set.")
 
 print(f"LangSmith tracing enabled: {os.getenv('LANGCHAIN_TRACING_V2') == 'true'}")
 print(f"LangSmith project: {os.getenv('LANGCHAIN_PROJECT')}")
 
-#All Classes
-# --- Tool Definition / Pydantic Models ---
-class ExtractedPromotionDetails(BaseModel):
-    promotion_type: str | None = Field(None, validation_alias=AliasChoices('Promotion Type', 'promotion_type'))
-
-    hierarchy_type: List[str] | None = Field(default=None, validation_alias=AliasChoices('Hierarchy Type', 'hierarchy_type'))
-    hierarchy_value: List[str] | None = Field(default=None, validation_alias=AliasChoices('Hierarchy Value', 'hierarchy_value'))
-    brand: List[str] | None = Field(default=None, validation_alias=AliasChoices('Brand', 'brand'))
-    
-    # Changed: Allow None or List
-    items: List[str] | None = Field(default=None, validation_alias=AliasChoices('Items', 'items'))
-    excluded_items: List[str] | None = Field(default=None, validation_alias=AliasChoices('Excluded Items', 'excluded_items'))
-    
-    discount_type: str | None = Field(None, validation_alias=AliasChoices('Discount Type', 'discount_type'))
-    discount_value: str | None = Field(None, validation_alias=AliasChoices('Discount Value', 'discount_value'))
-    start_date: str | None = Field(None, validation_alias=AliasChoices('Start Date', 'start_date'))
-    end_date: str | None = Field(None, validation_alias=AliasChoices('End Date', 'end_date'))
-    
-    # Changed: Allow None or List
-    stores: List[str] | None = Field(default=None, validation_alias=AliasChoices('Stores', 'stores'))
-    excluded_stores: List[str] | None = Field(default=None, validation_alias=AliasChoices('Excluded Stores', 'excluded_stores'))
-    
-    email: str | None = Field(None, validation_alias=AliasChoices('Email', 'email'))
+# Define the Pydantic model for individual items within the order
+class OrderItem(BaseModel):
+    """
+    Represents a single item within an order, with flexible field naming.
+    """
+    item_id: Optional[str] = Field(..., validation_alias=AliasChoices('Item ID', 'Product Code', 'SKU', 'Item No.'))
+    quantity: Optional[int] = Field(..., validation_alias=AliasChoices('Quantity', 'Qty', 'Quantity Ordered', 'Units'))
+    cost_per_unit: Optional[float] = Field(..., validation_alias=AliasChoices('Cost Per Unit', 'Unit Price', 'Rate', 'Price per Item'))
 
     class Config:
         populate_by_name = True
         extra = 'ignore'
 
-class UserIntent(BaseModel):
-    intent: str | None = Field(None)
+# Define the main Pydantic model for extracted order details
+# class ExtractedPurchaseOrderDetails(BaseModel):
+    # """
+    # Pydantic model to represent extracted order details from various sources,
+    # allowing for flexible field naming using AliasChoices.
+    # """
+    # supplier_id: Optional[str] = Field(..., validation_alias=AliasChoices('Supplier ID', 'Supplier', 'Supplier Code', 'Vendor ID'))
+    # estimated_delivery_date: Optional[str] = Field(..., validation_alias=AliasChoices('Estimated Delivery Date', 'Delivery Date', 'Expected Date', 'Est. Delivery'))
+    # total_quantity: Optional[int] = Field(..., validation_alias=AliasChoices('Total Quantity', 'Total Qty'))
+    # total_cost: Optional[float] = Field(..., validation_alias=AliasChoices('Total Cost', 'Grand Total', 'Amount'))
+    # total_tax: Optional[float] = Field(..., validation_alias=AliasChoices('Total Tax', 'Tax Amount', 'VAT'))
+    # items: Optional[List[OrderItem]] = Field(default_factory=list, validation_alias=AliasChoices('Items', 'Order Items', 'Products'))
+    # email: Optional[EmailStr] = Field(..., validation_alias=AliasChoices('Email', 'Email Address', 'Contact Email'))
 
-# --- API Request Model Class---
-class ChatRequestPromotion(BaseModel):
-    message: str
-    thread_id: str | None = None
+    # class Config:
+    #     populate_by_name = True # Allows using field names (e.g., supplier_id) as well as aliases
+    #     extra = 'ignore' # Ignore any extra fields the LLM might hallucinate that are not defined
+
+# class ExtractedPurchaseOrderDetails(BaseModel):
+#     """
+#     Pydantic model to represent extracted order details from various sources,
+#     allowing for flexible field naming using AliasChoices (modified format).
+#     """
+#     # Use | None for Optional fields, and set default=None for consistency
+#     # from ExtractedPromotionDetails, except where a default_factory is more appropriate. 
+#     supplier_id: str | None = Field(
+#         None, # Use None as the default value
+#         validation_alias=AliasChoices('Supplier ID', 'Supplier', 'Supplier Code', 'Vendor ID')
+#     )
+#     estimated_delivery_date: str | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Estimated Delivery Date', 'Delivery Date', 'Expected Date', 'Est. Delivery')
+#     )
+#     total_quantity: int | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Total Quantity', 'Total Qty')
+#     )
+#     total_cost: float | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Total Cost', 'Grand Total', 'Amount')
+#     )
+#     total_tax: float | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Total Tax', 'Tax Amount', 'VAT')
+#     )
+#     # The default_factory=list is often better for list fields than default=None
+#     items: List[OrderItem] | None = Field(
+#         default_factory=list,
+#         validation_alias=AliasChoices('Items', 'Order Items', 'Products')
+#     )
+#     email: EmailStr | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Email', 'Email Address', 'Contact Email')
+#     )
+
+#     class Config:
+#         populate_by_name = True # Allows using field names (e.g., supplier_id) as well as aliases
+#         extra = 'ignore' # Ignore any extra fields the LLM might hallucinate that are not defined      
+
+# class ExtractedPurchaseOrderDetails(BaseModel):
+#     """
+#     Pydantic model to represent extracted order details from various sources,
+#     allowing for flexible field naming using AliasChoices (modified format).
+#     """
+#     supplier_id: str | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Supplier ID', 'Supplier', 'Supplier Code', 'Vendor ID')
+#     )
+#     estimated_delivery_date: str | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Estimated Delivery Date', 'Delivery Date', 'Expected Date', 'Est. Delivery')
+#     )
+#     total_quantity: int | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Total Quantity', 'Total Qty')
+#     )
+#     total_cost: float | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Total Cost', 'Grand Total', 'Amount')
+#     )
+#     total_tax: float | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Total Tax', 'Tax Amount', 'VAT')
+#     )
+#     items: List[OrderItem] | None = Field(
+#         default_factory=list,
+#         validation_alias=AliasChoices('Items', 'Order Items', 'Products')
+#     )
+#     email: EmailStr | None = Field(
+#         None,
+#         validation_alias=AliasChoices('Email', 'Email Address', 'Contact Email')
+#     )
+
+#     @field_validator('*', mode='before')
+#     @classmethod
+#     def extract_value_from_dict(cls, v):
+#         """
+#         If the LLM returns {'value': x, 'is_example': y}, extract just the value.
+#         """
+#         if isinstance(v, dict) and 'value' in v:
+#             return v['value']
+#         return v
+
+#     class Config:
+#         populate_by_name = True
+#         extra = 'ignore'  
+
+class ExtractedPurchaseOrderDetails(BaseModel):
+    supplier_id: str | None = Field(None, validation_alias=AliasChoices('Supplier ID', 'Supplier', 'Supplier Code', 'Vendor ID'))
+    estimated_delivery_date: str | None = Field(None, validation_alias=AliasChoices('Estimated Delivery Date', 'Delivery Date', 'Expected Date', 'Est. Delivery'))
+    total_quantity: int | None = Field(None, validation_alias=AliasChoices('Total Quantity', 'Total Qty'))
+    total_cost: float | None = Field(None, validation_alias=AliasChoices('Total Cost', 'Grand Total', 'Amount'))
+    total_tax: float | None = Field(None, validation_alias=AliasChoices('Total Tax', 'Tax Amount', 'VAT'))
+    items: List[OrderItem] | None = Field(default=None, validation_alias=AliasChoices('Items', 'Order Items', 'Products'))
+    email: EmailStr | None = Field(None, validation_alias=AliasChoices('Email', 'Email Address', 'Contact Email'))
+
+    class Config:
+        populate_by_name = True
+        extra = 'ignore'
+# --- LangChain/LangGraph Setup ---
+# Initialize LLMs
+chat_model = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, streaming=True, temperature=0.7)
+# LLM for SQL generation (non-streaming, deterministic)
+sql_generator_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0)
+# LLM for detail extraction (non-streaming)
+extractor_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0)
+extractor_llm_structured = extractor_llm.with_structured_output(
+    ExtractedPurchaseOrderDetails,
+    method="function_calling", # Or "json_mode"
+    include_raw=False
+)
+
+# --- Database Schema and Helper Functions ---
+TABLE_SCHEMA = po_database_schema
+
+# Memoized table names to avoid repeated DB calls
+_table_names_cache = None
+
+def get_table_names():
+    """Fetch all table names from the database, with caching."""
+    global _table_names_cache
+    if _table_names_cache is not None:
+        return _table_names_cache
+
+    db: Optional[Session] = None
+    try:
+        with next(get_db()) as db: # Use context manager
+            # Adjust query for your specific SQL dialect (MySQL example)
+            result = db.execute(text("SHOW TABLES")).fetchall()
+            # For PostgreSQL:
+            # result = db.execute(text("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname != 'pg_catalog' AND schemaname != 'information_schema';")).fetchall()
+            _table_names_cache = [row[0] for row in result] # Extract table names
+            print(f"Fetched and cached table names: {_table_names_cache}")
+            return _table_names_cache
+    except Exception as e:
+        print(f"Error fetching table names: {e}")
+        return [] # Return empty list on error
+    # No finally db.close() needed with context manager
 
 # --- Graph State Definition ---
 class GraphState(TypedDict):
@@ -152,134 +286,9 @@ class GraphState(TypedDict):
     generated_sql: Optional[str] # SQL generated by the LLM
     sql_results: Optional[List[Dict] | str] # Results from DB execution or error string
     llm_response_content: Optional[str] # Content from the main LLM response node (to be streamed)
-    extracted_details: Optional[ExtractedPromotionDetails] # Details extracted from LLM response
+    extracted_details: Optional[ExtractedPurchaseOrderDetails] # Details extracted from LLM response
     user_intent: Optional[UserIntent] # Intent extracted from user input - for persisting state if needed
 
-#All Models
-chat_model = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, streaming=True, temperature=0.7)
-
-# LLM for SQL generation (non-streaming, deterministic)
-sql_generator_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0)
-
-# LLM for detail extraction (non-streaming)
-extractor_llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0)
-extractor_llm_structured = extractor_llm.with_structured_output(
-    ExtractedPromotionDetails,
-    method="function_calling", # Or "json_mode"
-    include_raw=False
-)
-
-# intent extraction llm can be initiated in main file as it is being used in multiple files
-# New LLM chain definitions for intent extraction in extract details
-intent_extractor_llm = ChatOpenAI(
-    model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0
-)
-intent_extractor_llm_structured = intent_extractor_llm.with_structured_output(
-    UserIntent, method="function_calling", include_raw=False
-)
-llm_tool_test = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
-# --- Database Schema and Helper Functions ---
-TABLE_SCHEMA = item_database_table
-
-
-_table_names_cache = None
-_table_columns_cache = {}
-
-def is_valid_identifier(name: str) -> bool:
-    """Validate that a string is a safe SQL identifier (alphanumeric + underscore only)."""
-    return bool(re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name))
-
-def get_table_names() -> List[str]:
-    """Fetch all table names from the database, with caching."""
-    global _table_names_cache
-    if _table_names_cache is not None:
-        return _table_names_cache
-
-    db = next(get_db())
-    try:
-        inspector = inspect(db.get_bind())
-        _table_names_cache = inspector.get_table_names()
-        print(f"Fetched and cached table names: {_table_names_cache}")
-        return _table_names_cache
-    except SQLAlchemyError as e:
-        print(f"Error fetching table names: {e}")
-        return []
-    finally:
-        db.close()
-
-def get_valid_columns(db: Session, table_name: str) -> Set[str]:
-    """Get valid columns for a table with caching."""
-    global _table_columns_cache
-    
-    if table_name in _table_columns_cache:
-        return _table_columns_cache[table_name]
-    
-    inspector = inspect(db.get_bind())
-    columns = {col['name'] for col in inspector.get_columns(table_name)}
-    _table_columns_cache[table_name] = columns
-    return columns
-
-def get_unique_column_values(table_name: str, columns: List[str]) -> Dict[str, List[Any]]:
-    """Fetch unique values for each column in the given table."""
-    unique_values = {}
-    db = next(get_db())
-    
-    try:
-        # SECURITY LAYER 1: Validate identifier format (prevent special characters)
-        if not is_valid_identifier(table_name):
-            print(f"Invalid table name format: {table_name}")
-            return {}
-        
-        for col in columns:
-            if not is_valid_identifier(col):
-                print(f"Invalid column name format: {col}")
-                unique_values[col] = []
-                continue
-        
-        # SECURITY LAYER 2: Validate table exists in database
-        inspector = inspect(db.get_bind())
-        valid_tables = inspector.get_table_names()
-        
-        if table_name not in valid_tables:
-            print(f"Table does not exist: {table_name}")
-            return {}
-        
-        # SECURITY LAYER 3: Validate columns exist in the table
-        valid_columns = get_valid_columns(db, table_name)
-        
-        for col in columns:
-            if col not in valid_columns:
-                print(f"Column '{col}' does not exist in table '{table_name}'")
-                unique_values[col] = []
-                continue
-            
-            try:
-                # After triple validation, use quoted identifiers
-                # Get the dialect-specific identifier quote character
-                dialect = db.get_bind().dialect
-                quote_char = dialect.identifier_preparer.initial_quote
-                
-                # Manually quote identifiers (safe after validation)
-                quoted_table = f"{quote_char}{table_name}{quote_char}"
-                quoted_col = f"{quote_char}{col}{quote_char}"
-                
-                # Build query with validated and quoted identifiers
-                query = text(f"SELECT DISTINCT {quoted_col} FROM {quoted_table}")
-                result = db.execute(query).fetchall()
-                
-                unique_values[col] = [row[0] for row in result if row[0] is not None]
-                
-            except SQLAlchemyError as col_err:
-                print(f"Error fetching column '{col}': {col_err}")
-                unique_values[col] = []
-                
-    except SQLAlchemyError as e:
-        print(f"Database error: {e}")
-    finally:
-        db.close()
-    
-    return unique_values
 
 # --- Graph Nodes ---
 async def preprocess_input(state: GraphState) -> Dict:
@@ -290,224 +299,124 @@ async def preprocess_input(state: GraphState) -> Dict:
         raise ValueError("Last message is not a HumanMessage")
     user_query = last_message.content
     print(f"User Query: {user_query}")
-    # print("Unique Item Values :", get_unique_column_values("itemmaster", ["brand", "itemDepartment", "itemClass", "itemSubClass"]))
     return {"user_query": user_query}
 
+#sql ignored for now
 async def generate_sql(state: GraphState) -> Dict:
     """
     Node to attempt generating SQL from the user query.
-    Uses the dedicated sql_generator_llm with improved unique values integration.
+    Uses the dedicated sql_generator_llm.
+    Includes post-processing to fix missing closing parenthesis.
     """
     print("--- Node: generate_sql ---")
     user_query = state.get("user_query")
     if not user_query:
         print("--- No user query found. Skipping SQL generation. ---")
         return {"generated_sql": None}
-    
-    # Fetch unique values with caching
-    unique_item_values = get_unique_column_values(
-        "itemmaster", 
-        ["brand", "itemDepartment", "itemClass", "itemSubClass"]
-    )
-    unique_item_diffs = get_unique_column_values(
-        "itemdiffs", 
-        ["diffId", "diffType"]
-    )
-    unique_store_values = get_unique_column_values(
-        "storedetails", 
-        ["storeName", "city", "state", "zipCode"]
-    )
-    
-    # Format unique values more clearly for LLM
-    def format_unique_values(data: Dict[str, List[Any]], indent: str = "  ") -> str:
-        """Format unique values in a clean, readable format."""
-        if not data:
-            return f"{indent}(No values available)"
-        
-        lines = []
-        for key, values in data.items():
-            if not values:
-                lines.append(f"{indent}- {key}: (empty)")
-            elif len(values) <= 20:  # Show all if reasonable
-                lines.append(f"{indent}- {key}: {', '.join(map(str, values))}")
-            else:  # Show sample for large lists
-                sample = ', '.join(map(str, values[:15]))
-                lines.append(f"{indent}- {key}: {sample}... ({len(values)} total values)")
-        return '\n'.join(lines)
-    
-    formatted_item_values = format_unique_values(unique_item_values)
-    formatted_diff_values = format_unique_values(unique_item_diffs)
-    formatted_store_values = format_unique_values(unique_store_values)
-    
-    # Extract specific lists for inline referencing
-    available_brands = unique_item_values.get("brand", [])
-    available_departments = unique_item_values.get("itemDepartment", [])
-    available_classes = unique_item_values.get("itemClass", [])
-    available_subclasses = unique_item_values.get("itemSubClass", [])
-    available_diff_ids = unique_item_diffs.get("diffId", [])
-    available_diff_types = unique_item_diffs.get("diffType", [])
-    
-    sql_generation_prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""You are an expert SQL generator. Your task is to convert natural language questions into valid SQL SELECT statements based on the database schema and available data values.
 
-DATABASE SCHEMA:
+    # Updated prompt for SQL generation
+    # Added emphasis on balanced parentheses in rule 7
+    sql_generation_prompt = ChatPromptTemplate.from_messages([
+        ("system", f"""You are an expert SQL generator. Your task is to convert the user's natural language question into a valid SQL SELECT statement based ONLY on the database schema and rules provided below.
+
+Database Schema:
 {TABLE_SCHEMA}
 
-AVAILABLE DATA VALUES (Use these for exact matching):
+Core Task: Generate a SQL SELECT statement to retrieve `itemmaster.itemId` (and potentially other requested columns like `supplierCost`) based on the user's filtering criteria.
 
-itemmaster table:
-{formatted_item_values}
+Rules & Instructions:
+1.  **Focus on Selection Criteria:** Analyze the user's request and extract ONLY the criteria relevant for selecting items (e.g., brand, color, size, department, class, subclass, supplier cost).
+2.  **Ignore Irrelevant Information:** Completely IGNORE any information not directly related to filtering or selecting items based on the schema. This includes discounts, promotion details, validity dates, action verbs like "Create", "Offer", "Update", store IDs (unless specifically asked to filter by store details from `storedetails`). Your output MUST be a SELECT query, nothing else.
+3.  **SELECT Clause:** Primarily select `im.itemId`. If supplier cost is mentioned or requested, also select `isup.supplierCost`. If other specific columns are requested, include them using the appropriate aliases (im, isup, idf, sd). Use `DISTINCT` if joins might produce duplicate `itemId`s based on the query structure.
+4.  **FROM Clause:** Start with `FROM itemmaster im`.
+5.  **JOIN Clauses:**
+    * If filtering by `supplierCost` or selecting it, `JOIN itemsupplier isup ON im.itemId = isup.itemId`.
+    * Filtering by attributes (color, size, material, etc. stored in `itemdiffs`) requires checking `diffType1`, `diffType2`, `diffType3`. Use the `EXISTS` method for this. See Example 1 below.
+    * If filtering by store details, `JOIN storedetails sd ON ...` (Note: There's no direct link given between itemmaster/itemsupplier and storedetails in the schema, assume filtering by store details applies elsewhere or cannot be done with this schema unless a link is implied or added).
+6.  **WHERE Clause Construction:**
+    * **Attributes (`itemdiffs`):** To filter by an attribute like 'Red' or 'Large', use `EXISTS` subqueries checking `itemdiffs` linked via `diffType1`, `diffType2`, or `diffType3`. Example: `WHERE EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red')`.
+    * **Direct `itemmaster` Fields:**
+        * Use `im.brand = 'Value'` for exact brand matches.
+        * Use `im.itemDepartment LIKE 'Value%'` for department matches.
+        * Use `im.itemClass LIKE 'Value%'` for class matches.
+        * Use `im.itemSubClass LIKE 'Value%'` for subclass matches.
+    * **`itemsupplier` Fields:** Use `isup.supplierCost < Value`, `isup.supplierCost > Value`, etc.
+    * **Multiple Values (Same Field):** Use `OR` (e.g., `im.brand = 'Zara' OR im.brand = 'Adidas'`). Consider using `IN` for longer lists (e.g., `im.brand IN ('Zara', 'Adidas')`).
+    * **Multiple Conditions (Different Fields):** Use `AND` (e.g., `im.itemDepartment LIKE 'T-Shirt%' AND im.brand = 'Zara'`). When combining multiple `EXISTS` clauses with `OR`, group them using parentheses: `AND (EXISTS(...) OR EXISTS(...))`.
+7.  **Output Format:** Generate ONLY the SQL SELECT statement. No explanations, no comments, no markdown backticks (```sql ... ```), no trailing semicolon. Ensure all parentheses are correctly balanced, especially when using `AND (...)` for grouping `EXISTS` clauses.
+8.  **Invalid Queries:** If the user's query asks for something impossible with the schema (e.g., filtering items by store without a link, asking for non-SELECT operations), respond with "Query cannot be answered with the provided schema."
 
-itemdiffs table (for attributes like color, size, material):
-{formatted_diff_values}
+Examples (Study these carefully):
 
-storedetails table:
-{formatted_store_values}
+Example 1: Select all red colored items
+User Query: "Select all red colored items"
+SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red')
 
-CRITICAL INSTRUCTIONS:
+Example 2: Select all red colored items with a supplier cost below $50
+User Query: "Select all red colored items with a supplier cost below $50"
+SQL: SELECT DISTINCT im.itemId, isup.supplierCost FROM itemmaster im JOIN itemsupplier isup ON im.itemId = isup.itemId WHERE isup.supplierCost < 50 AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red'))
 
-1. **Value Matching & Fuzzy Logic:**
-   - When the user mentions a brand, department, class, or attribute, find the CLOSEST MATCH from the available values above
-   - Examples of fuzzy matching:
-     * User says "zara" → Match to exact value "Zara" from available brands
-     * User says "tshirt" or "t shirt" → Match to "T-Shirt" from available departments
-     * User says "red" or "Red color" → Match to "Red" from available diffId values
-     * User says "nike shoes" → Extract brand="Nike" and potentially itemClass matching "Shoes"
-   - ALWAYS use the exact casing and spelling from the available values in your SQL
-   - If no close match exists, use the user's value but mention this in your reasoning
+Example 3: Select all items from FashionX and Zara brands
+User Query: "Select all items from FashionX and Zara brands"
+SQL: SELECT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' OR im.brand = 'Zara'
 
-2. **Attribute Filtering (itemdiffs):**
-   - Attributes like color, size, material are stored in the itemdiffs table
-   - Available attribute values: {', '.join(available_diff_ids[:30])}{"..." if len(available_diff_ids) > 30 else ""}
-   - Available attribute types: {', '.join(available_diff_types)}
-   - To filter by an attribute, use EXISTS with OR across diffType1, diffType2, diffType3
-   - Example pattern for filtering by 'Red':
-     ```sql
-     AND (
-       EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red')
-       OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red')
-       OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red')
-     )
-     ```
+Example 4: Select all items from T-Shirt department and Casuals class
+User Query: "Select all items from T-Shirt department and Casuals class"
+SQL: SELECT im.itemId FROM itemmaster im WHERE im.itemDepartment LIKE 'T-Shirt%' AND im.itemClass LIKE 'Casuals%'
 
-3. **Core Query Structure:**
-   - **SELECT:** Start with `SELECT DISTINCT im.itemId` (add other columns if requested)
-   - **FROM:** Always `FROM itemmaster im`
-   - **JOIN:** Add `JOIN itemsupplier isup ON im.itemId = isup.itemId` ONLY if filtering/selecting supplierCost
-   - **WHERE:** Build conditions based on user requirements
-
-4. **WHERE Clause Best Practices:**
-   - Brand: `im.brand = 'ExactBrandName'` (use exact match from available values)
-   - Department: `im.itemDepartment LIKE 'DepartmentName%'` (use LIKE for partial matches)
-   - Class: `im.itemClass LIKE 'ClassName%'`
-   - SubClass: `im.itemSubClass LIKE 'SubClassName%'`
-   - Multiple values (same field): Use `IN` clause: `im.brand IN ('Zara', 'Nike', 'Adidas')`
-   - Multiple attributes: Combine with `AND` between different conditions
-   - Supplier cost: `isup.supplierCost < value` or `isup.supplierCost BETWEEN min AND max`
-
-5. **Ignore Non-Selection Information:**
-   - Completely ignore: discounts, promotions, dates, validity periods, action verbs (Create, Offer, Update)
-   - Focus ONLY on: what items to select and their filtering criteria
-   - Output must ONLY be a SELECT query
-
-6. **Syntax Validation (Self-Check before output):**
-   - ✓ Balanced parentheses: count opening "(" equals closing ")"
-   - ✓ Balanced quotes: all string literals properly quoted
-   - ✓ No trailing AND/OR operators
-   - ✓ Joins only when needed
-   - ✓ No semicolon at the end
-   - ✓ Query starts with SELECT
-
-7. **Output Format:**
-   - Think through your query construction step-by-step (invisible reasoning)
-   - Perform self-validation checklist
-   - Output ONLY the final SQL statement with no backticks, comments, or explanations
-   - If query is impossible with schema, output exactly: `Query cannot be answered with the provided schema.`
-
-EXAMPLES:
-
-Example 1 - Simple brand filter:
-User: "Show me all Nike products"
-Reasoning: User wants brand="Nike". Check available brands → "Nike" exists
-SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE im.brand = 'Nike'
-
-Example 2 - Attribute filter (color):
-User: "All red items"
-Reasoning: "red" is an attribute. Check diffId values → "Red" exists. Use EXISTS pattern.
-SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Red') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Red'))
-
-Example 3 - Multiple brands:
-User: "Items from Zara, Nike, or Adidas"
-Reasoning: Multiple brands. Check available → all exist. Use IN clause.
-SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE im.brand IN ('Zara', 'Nike', 'Adidas')
-
-Example 4 - Brand + Department + Cost:
-User: "Zara t-shirts under $30"
-Reasoning: brand=Zara, department=T-Shirt (fuzzy match "t-shirts"), cost filter. Need JOIN for cost.
-SQL: SELECT DISTINCT im.itemId, isup.supplierCost FROM itemmaster im JOIN itemsupplier isup ON im.itemId = isup.itemId WHERE im.brand = 'Zara' AND im.itemDepartment LIKE 'T-Shirt%' AND isup.supplierCost < 30
-
-Example 5 - Complex with attribute + multiple conditions:
-User: "Show blue Nike shoes from the sportswear department"
-Reasoning: brand=Nike, attribute=Blue, itemClass or department contains shoes/sportswear
-SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE im.brand = 'Nike' AND im.itemDepartment LIKE 'Sportswear%' AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Blue') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Blue') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Blue'))
-
-Example 6 - Ignore promotional info:
-User: "Create a 40% discount on all yellow FashionX t-shirts valid until May 2025"
-Reasoning: Ignore "discount", "40%", "valid until May". Extract: brand=FashionX, department=T-Shirt, attribute=Yellow
+Example 5: Complex request with irrelevant info
+User Query: "Create a simple promotion offering 30% off all yellow items from the FashionX Brand in the T-Shirt Department, valid from 17/04/2025 until the end of May 2025."
 SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' AND im.itemDepartment LIKE 'T-Shirt%' AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Yellow'))
-
-Remember: Use exact values from the available data. Perform fuzzy matching mentally but output exact database values.
 """),
-        ("human", "Convert this question to a SQL SELECT query:\n\n{user_query}")
+        ("human", "Convert this question to a SQL SELECT query:\n\n```text\n{user_query}\n```")
     ])
 
-    # Create the generation chain
+    # Create the generation chain (Prompt -> LLM -> String Output)
     sql_generation_chain = sql_generation_prompt | sql_generator_llm | StrOutputParser()
 
-    generated_sql = None
+    generated_sql = None # Default to None
     try:
-        # Limit input text length
+        # Limit input text length (optional)
         max_len = 2000
         truncated_query = user_query[:max_len] + ("..." if len(user_query) > max_len else "")
 
         print(f"--- Generating SQL for: '{truncated_query}' ---")
         llm_output = await sql_generation_chain.ainvoke({"user_query": truncated_query})
 
-        # Clean output
+        # Basic validation and cleaning
         cleaned_sql = llm_output.strip().strip(';').strip()
-        
-        # Remove markdown code blocks if present
-        if cleaned_sql.startswith("```"):
-            lines = cleaned_sql.split('\n')
-            cleaned_sql = '\n'.join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            cleaned_sql = cleaned_sql.strip()
 
-        # Validate parentheses balance
-        if cleaned_sql.count("(") != cleaned_sql.count(")"):
-            print(f"--- WARNING: Unbalanced parentheses detected. Opening: {cleaned_sql.count('(')}, Closing: {cleaned_sql.count(')')} ---")
-            # Attempt to fix if only one closing paren is missing
-            if cleaned_sql.count("(") == cleaned_sql.count(")") + 1:
-                print("--- Auto-fixing: Adding missing closing parenthesis ---")
-                cleaned_sql += ")"
+        # *** START FIX: Add missing closing parenthesis for EXISTS groups ***
+        # Check if the query uses the specific pattern ' AND (EXISTS ...' and lacks the closing parenthesis
+        # Use case-insensitive check for robustness
+        pattern_start_exists = " AND (EXISTS ("
+        if pattern_start_exists.lower() in cleaned_sql.lower() and not cleaned_sql.endswith(")"):
+             # Check if the number of opening parentheses is one more than closing ones
+             # This is a slightly more robust check than just checking the end
+             if cleaned_sql.count("(") == cleaned_sql.count(")") + 1:
+                 print("--- Post-processing: Adding missing closing parenthesis for EXISTS group. ---")
+                 cleaned_sql += ")"
+        # *** END FIX ***
 
         if not cleaned_sql:
             print("--- Generation failed: LLM returned empty string. ---")
         elif "cannot be answered" in cleaned_sql.lower():
             print(f"--- LLM indicated query cannot be answered: {cleaned_sql} ---")
         elif cleaned_sql.lower().startswith("select"):
-            # Security check for harmful keywords
-            harmful_keywords = ['update ', 'insert ', 'delete ', 'drop ', 'alter ', 'truncate ', 'exec ', 'execute ']
+            # Further check for potentially harmful keywords (basic protection)
+            harmful_keywords = ['update ', 'insert ', 'delete ', 'drop ', 'alter ', 'truncate ']
             if any(keyword in cleaned_sql.lower() for keyword in harmful_keywords):
-                print(f"--- Generation failed: Potentially harmful keyword detected: {cleaned_sql} ---")
+                print(f"--- Generation failed: Potentially harmful non-SELECT keyword detected: {cleaned_sql} ---")
             else:
-                print(f"--- SQL Generation Successful: {cleaned_sql} ---")
-                generated_sql = cleaned_sql
+                print(f"--- SQL Generation Successful (after potential fix): {cleaned_sql} ---")
+                generated_sql = cleaned_sql # Assign the potentially fixed SQL
         else:
             print(f"--- Generation failed: Output does not start with SELECT: {cleaned_sql} ---")
 
     except Exception as e:
         print(f"!!! ERROR during SQL generation: {e} !!!")
         traceback.print_exc()
+        # Keep generated_sql as None
 
     return {"generated_sql": generated_sql}
 
@@ -642,7 +551,7 @@ async def generate_response_from_sql(state: 'GraphState') -> Dict:
 
     # Define the prompt for summarizing SQL results
     today = datetime.datetime.now().strftime("%d/%m/%Y")
-    system_prompt_content = template_Promotion_without_date.replace("{current_date}", today)
+    system_prompt_content = template_PO_without_date.replace("{current_date}", today)
     sql_summary_prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt_content),
         MessagesPlaceholder(variable_name="history"), # Include history
@@ -698,7 +607,7 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
 
     # Use the original system prompt and conversation history
     today = datetime.datetime.now().strftime("%d/%m/%Y")
-    system_prompt_content = template_Promotion_without_date.replace("{current_date}", today)
+    system_prompt_content = template_PO_without_date.replace("{current_date}", today)
 
     prompt_template = ChatPromptTemplate.from_messages([
         ("system", system_prompt_content),
@@ -783,20 +692,19 @@ def _to_plain(obj):
         return jsonable_encoder(obj)
     except Exception:
         return str(obj)
-
-intent_system =promotion_intent_system
-
+    
+intent_system=purchase_order_intent_system
 # Replace your existing extract_details with this version
 async def extract_details(state: GraphState) -> Dict:
     """
-    Node to extract structured promotion details and user intent from the conversation so far.
+    Node to extract structured purchase order details and user intent from the conversation so far.
     Returns:
       - extracted_details
       - user_intent
     This version prints user_intent at several stages for debugging.
     """
     print("--- Node: extract_details (ENTER) ---")
-    extracted_data: Optional[ExtractedPromotionDetails] = None
+    extracted_data: Optional[ExtractedPurchaseOrderDetails] = None
     user_intent: Optional[UserIntent] = None
 
     # Build chat_history string (unchanged)
@@ -812,41 +720,14 @@ async def extract_details(state: GraphState) -> Dict:
     chat_history_str = "\n".join(chat_history_lines)
 
     # build missing_fields (unchanged)
-    prev: Optional[ExtractedPromotionDetails] = state.get("extracted_details")
-    missing_fields: List[str] = []
-    if prev is None or not getattr(prev, "promotion_type", None):
-        missing_fields.append("Promotion Type")
-    if prev is None or not getattr(prev, "hierarchy_type", None):
-        missing_fields.append("Hierarchy Level Type")
-    if prev is None or not getattr(prev, "hierarchy_value", None):
-        missing_fields.append("Hierarchy Level Value")
-    if prev is None or not getattr(prev, "brand", None):
-        missing_fields.append("Brand")
-    if prev is None or not getattr(prev, "items", None):
-        missing_fields.append("Items")
-    if prev is None or not getattr(prev, "discount_type", None):
-        missing_fields.append("Discount Type")
-    if prev is None or not getattr(prev, "discount_value", None):
-        missing_fields.append("Discount Value")
-    if prev is None or not getattr(prev, "start_date", None):
-        missing_fields.append("Start Date")
-    if prev is None or not getattr(prev, "end_date", None):
-        missing_fields.append("End Date")
-    if prev is None or not getattr(prev, "stores", None):
-        missing_fields.append("Stores")
-    if prev is None or not getattr(prev, "email", None):
-        missing_fields.append("Email")
+    prev: Optional[ExtractedPurchaseOrderDetails] = state.get("extracted_details")
 
-    missing_fields_str = "\n".join(f"- {f}" for f in missing_fields) if missing_fields else "None"
-
-    # prepare prompt_filled (unchanged)
-    current_date = datetime.date.today().strftime("%d/%m/%Y")
     try:
-        prompt_filled = promotion_extraction_prompt \
+        prompt_filled = po_extraction_prompt \
             .replace("{{extracted_text}}", chat_history_str) 
     except Exception as e:
-        print(f"Error formatting template_Promotion_without_date: {e}")
-        prompt_filled = promotion_extraction_prompt
+        print(f"Error formatting template_Po_without_date: {e}")
+        prompt_filled = po_extraction_prompt
 
     # 4. Invoke structured extractor LLM
     try:
@@ -862,7 +743,7 @@ async def extract_details(state: GraphState) -> Dict:
         except Exception:
             print("RAW llm_result: <unprintable>")
 
-        if isinstance(llm_result, ExtractedPromotionDetails):
+        if isinstance(llm_result, ExtractedPurchaseOrderDetails):
             extracted_data = llm_result
             print("--- extract_details: extracted_data populated ---")
             print("extracted_data (plain):", _to_plain(extracted_data))
@@ -949,6 +830,54 @@ async def extract_details(state: GraphState) -> Dict:
         "user_intent": user_intent
     }
 
+async def extract_details_old(state: GraphState) -> Dict:
+    """
+    Node to extract structured details from the final LLM response content.
+    This happens server-side after the response is generated.
+    """
+    print("--- Node: extract_details ---")
+    response_text = state.get("llm_response_content")
+    extracted_data: Optional[ExtractedPurchaseOrderDetails] = None # Default
+
+    if not response_text:
+        print("--- No LLM response text found for extraction. Skipping. ---")
+        return {"extracted_details": None}
+
+    # Simple instruction for the extractor LLM
+    today = datetime.datetime.now().strftime("%d/%m/%Y")
+    extraction_prompt = ChatPromptTemplate.from_messages([
+        ("system", po_extraction_prompt),
+        #changed promotion to po
+        ("human", "Extract purchase order details from this text:\n\n```text\n{text_to_extract}\n```")
+    ])
+
+    # Create the extraction chain
+    extraction_chain = extraction_prompt | extractor_llm_structured
+
+    try:
+        # Limit input text length for safety/cost
+        max_len = 8000
+        truncated_text = response_text[:max_len] + ("..." if len(response_text) > max_len else "")
+
+        print(f"--- Extracting details from: '{truncated_text[:200]}...' ---")
+        llm_extracted_data = await extraction_chain.ainvoke({"text_to_extract": truncated_text})
+
+        if llm_extracted_data and isinstance(llm_extracted_data, ExtractedPurchaseOrderDetails):
+            print("--- Extraction Successful ---")
+            extracted_data = llm_extracted_data
+            print(f"Extracted Data: {extracted_data.model_dump_json(indent=2)}") # Log extracted data
+        elif llm_extracted_data:
+             print(f"--- Extraction returned unexpected type: {type(llm_extracted_data)} ---")
+        else:
+            print("--- Extraction returned no data. ---")
+
+    except Exception as e:
+        print(f"!!! ERROR during detail extraction: {e} !!!")
+        traceback.print_exc()
+        # Keep extracted_data as None
+
+    return {"extracted_details": extracted_data}
+
 def should_continue(state: GraphState) -> str:
     """
     Determines if the conversation should continue or end.
@@ -980,7 +909,6 @@ def should_execute_sql(state: GraphState) -> str:
     else:
         print("Decision: No SQL generated, routing to generate_direct_response")
         return "generate_direct_response"
-
 # --- Build the Workflow ---
 workflow = StateGraph(GraphState)
 # Add nodes
@@ -1019,209 +947,16 @@ workflow.add_conditional_edges(
 )
 # --- Memory and Compilation ---
 memory = MemorySaver()
-app_runnable_promotion_agentic = workflow.compile(checkpointer=memory)
-
-# Connection manager to handle multiple WebSocket connections
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-
-    async def connect(self, websocket: WebSocket, thread_id: str):
-        await websocket.accept()
-        self.active_connections[thread_id] = websocket
-        print(f"WebSocket connected for thread: {thread_id}")
-
-    def disconnect(self, thread_id: str):
-        if thread_id in self.active_connections:
-            del self.active_connections[thread_id]
-            print(f"WebSocket disconnected for thread: {thread_id}")
-
-    async def send_message(self, message: dict, thread_id: str):
-        if thread_id in self.active_connections:
-            await self.active_connections[thread_id].send_json(message)
-
-    async def send_text(self, text: str, thread_id: str):
-        if thread_id in self.active_connections:
-            await self.active_connections[thread_id].send_text(text)
-
-manager = ConnectionManager()
-
-# Modified stream generator for WebSocket
-async def stream_response_generator_websocket(
-    graph_stream: AsyncIterator[Dict],
-    websocket: WebSocket,
-    thread_id: str
-) -> None:
-    """
-    Streams LLM response chunks to WebSocket client with structured events.
-    """
-    print(f"--- WEBSOCKET STREAM GENERATOR STARTED for thread: {thread_id} ---")
-    full_response_for_log = ""
-    
-    try:
-        async for event in graph_stream:
-            # Stream text chunks
-            if event["event"] == "on_chat_model_stream":
-                metadata = event.get("metadata", {})
-                node_name = metadata.get("langgraph_node")
-                
-                if node_name in {"generate_direct_response", "generate_response_from_sql"}:
-                    chunk = event["data"].get("chunk")
-                    if isinstance(chunk, AIMessageChunk) and chunk.content:
-                        content = chunk.content
-                        full_response_for_log += content
-                        
-                        # Send as structured message
-                        await manager.send_message({
-                            "type": "stream_chunk",
-                            "content": content,
-                            "node": node_name
-                        }, thread_id)
-            
-            # Send extracted details when available
-            elif event["event"] == "on_node_end" and event.get("name") == "extract_details":
-                output = event["data"].get("output", {})
-                
-                # Safely serialize extracted details
-                extracted_details = output.get("extracted_details")
-                user_intent = output.get("user_intent")
-                
-                payload = {
-                    "type": "extracted_details",
-                    "extracted_details": _to_plain(extracted_details) if extracted_details else None,
-                    "user_intent": _to_plain(user_intent) if user_intent else None,
-                }
-                
-                await manager.send_message(payload, thread_id)
-                print(f"Sent extracted details: {payload}")
-        
-        # Send completion signal
-        await manager.send_message({
-            "type": "stream_complete",
-            "full_response": full_response_for_log
-        }, thread_id)
-        
-    except Exception as e:
-        print(f"!!! ERROR in websocket stream generator: {e} !!!")
-        traceback.print_exc()
-        
-        await manager.send_message({
-            "type": "error",
-            "message": str(e)
-        }, thread_id)
-    
-    finally:
-        print(f"--- WEBSOCKET STREAM GENERATOR FINISHED for thread: {thread_id} ---")
-
+app_runnable_purchase_order_agentic = workflow.compile(checkpointer=memory)
+# --- FastAPI Application ---
 app = FastAPI(
     title="LangGraph Chatbot API",
     description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
 )
-# WebSocket endpoint (replace your POST endpoint)
-@app.websocket("/ws/promotion_chat/{thread_id}")
-async def websocket_promotion_chat(websocket: WebSocket, thread_id: str):
-    """
-    WebSocket endpoint for promotion chat with agentic capabilities.
-    
-    Expected message format from client:
-    {
-        "type": "message",
-        "content": "user message text",
-        "thread_id": "optional-override"
-    }
-    
-    Response format:
-    {
-        "type": "stream_chunk" | "extracted_details" | "stream_complete" | "error",
-        "content": "...",  // for stream_chunk
-        "extracted_details": {...},  // for extracted_details
-        "user_intent": {...},  // for extracted_details
-        "message": "..."  // for error
-    }
-    """
-    await manager.connect(websocket, thread_id)
-    config = {"configurable": {"thread_id": thread_id}}
-    
-    try:
-        while True:
-            # Receive message from client
-            data = await websocket.receive_json()
-            print(f"\n--- [Thread: {thread_id}] Received WebSocket message: {data} ---")
-            
-            message_type = data.get("type")
-            
-            if message_type == "message":
-                user_message = data.get("content", "")
-                
-                if not user_message.strip():
-                    await manager.send_message({
-                        "type": "error",
-                        "message": "Empty message received"
-                    }, thread_id)
-                    continue
-                
-                # Send acknowledgment
-                await manager.send_message({
-                    "type": "ack",
-                    "message": "Processing your request..."
-                }, thread_id)
-                
-                # Prepare input for graph
-                input_message = HumanMessage(content=user_message)
-                input_state = {"messages": [input_message]}
-                
-                try:
-                    # Stream graph execution
-                    graph_stream = app_runnable_promotion_agentic.astream_events(
-                        input_state, 
-                        config,
-                        version="v1"
-                    )
-                    
-                    # Process and stream results
-                    await stream_response_generator_websocket(
-                        graph_stream,
-                        websocket,
-                        thread_id
-                    )
-                    
-                except Exception as graph_error:
-                    print(f"!!! ERROR in graph execution: {graph_error} !!!")
-                    traceback.print_exc()
-                    
-                    await manager.send_message({
-                        "type": "error",
-                        "message": f"Error processing request: {str(graph_error)}"
-                    }, thread_id)
-            
-            elif message_type == "ping":
-                # Heartbeat mechanism
-                await manager.send_message({
-                    "type": "pong"
-                }, thread_id)
-            
-            else:
-                await manager.send_message({
-                    "type": "error",
-                    "message": f"Unknown message type: {message_type}"
-                }, thread_id)
-    
-    except WebSocketDisconnect:
-        manager.disconnect(thread_id)
-        print(f"Client disconnected: {thread_id}")
-    
-    except Exception as e:
-        print(f"!!! WebSocket error for thread {thread_id}: {e} !!!")
-        traceback.print_exc()
-        manager.disconnect(thread_id)
-
-# --- FastAPI Application ---
-
 origins = [
     "http://localhost:3000", # Allow your frontend origin
     # Add other origins if needed
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -1229,6 +964,40 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- API Request Model ---
+class ChatRequestPurchaseOrder(BaseModel):
+    message: str
+    thread_id: str | None = None
+
+async def stream_response_generator_purchase_order(
+    graph_stream: AsyncIterator[Dict]
+) -> AsyncIterator[str]:
+    """
+    Asynchronously streams LLM response chunks from specified nodes
+    to the client as soon as they arrive.
+    """
+    print("--- STREAM GENERATOR (for client) STARTED ---")
+    full_response_for_log = ""
+    try:
+        async for event in graph_stream:
+            if event["event"] == "on_chat_model_stream":
+                metadata = event.get("metadata", {})
+                node_name = metadata.get("langgraph_node")
+                if node_name in {"generate_direct_response", "generate_response_from_sql"}:
+                    chunk = event["data"].get("chunk")
+                    if isinstance(chunk, AIMessageChunk) and chunk.content:
+                        content = chunk.content
+                        full_response_for_log += content
+                        yield content
+    except Exception as e:
+        print(f"!!! ERROR in stream_response_generator_purchase_order: {e} !!!")
+        # If nothing has been sent yet, at least send an error
+        yield f"\n\nStream error: {e}"
+    finally:
+        print(f"--- STREAM GENERATOR (for client) FINISHED ---")
+        # For debugging, you could log full_response_for_log here
+
 # --- Main Execution ---
 if __name__ == "__main__":
     import uvicorn
@@ -1237,4 +1006,40 @@ if __name__ == "__main__":
     get_table_names()
     # Run the server
     uvicorn.run(app, host="0.0.0.0", port=8000)
+            
+# --- FastAPI Endpoint ---
+# @app.post("/chat/")
+# async def chat_endpoint(request: ChatRequestPurchaseOrder):
+#     """
+#     Receives user message, invokes the LangGraph app, and streams the
+#     appropriate LLM response back to the client. Server-side processing
+#     (SQL, extraction) happens within the graph nodes.
+#     """
+#     user_message = request.message
+#     thread_id = request.thread_id or str(uuid.uuid4())
+#     config = {"configurable": {"thread_id": thread_id}}
+
+#     print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+
+#     # Prepare input for the graph - the input is the list of messages
+#     input_message = HumanMessage(content=user_message)
+#     input_state = {"messages": [input_message]} # Pass the new message in the list
+
+#     try:
+#         # Use astream_events to get the stream of events from the graph execution
+#         graph_stream = app_runnable_purchase_order.astream_events(input_state, config, version="v2")
+
+#         # Return a StreamingResponse that iterates over the generator
+#         return StreamingResponse(
+#             stream_response_generator_purchase_order(graph_stream), # Pass the graph stream to the generator
+#             media_type="text/event-stream" # Use text/event-stream for Server-Sent Events
+#             # media_type="text/plain" # Or application/jsonl if streaming JSON chunks
+#         )
+
+#     except Exception as e:
+#         print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
+
+
 

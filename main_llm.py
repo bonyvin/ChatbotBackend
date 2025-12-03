@@ -14,8 +14,9 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.encoders import jsonable_encoder
 from promo_llm import ChatRequestPromotion,stream_response_generator_promotion,app_runnable_promotion 
 from promo_llm_agentic import app_runnable_promotion_agentic
-from invoice_llm import ChatRequestInvoice,stream_response_generator_invoice,app_runnable_invoice
-from po_llm import ChatRequestPurchaseOrder,stream_response_generator_purchase_order,app_runnable_purchase_order
+from invoice_llm import ChatRequestInvoice,stream_response_generator_invoice,app_runnable_invoice,stream_response_generator_invoice
+# from po_llm import ChatRequestPurchaseOrder,stream_response_generator_purchase_order,app_runnable_purchase_order
+from po_llm_agentic import ChatRequestPurchaseOrder,stream_response_generator_purchase_order,app_runnable_purchase_order_agentic,stream_response_generator_purchase_order
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import (
     HumanMessage,
@@ -160,155 +161,7 @@ app = FastAPI(
 #         except Exception:
 #             pass
 
-@app.websocket("/ws/promotion_chat")
-async def websocket_promotion_chat(websocket: WebSocket):
-    """
-    WebSocket that streams both chat tokens AND extracted details.
-    """
-    await websocket.accept()
-    try:
-        while True:
-            raw = await websocket.receive_text()
-            try:
-                payload = json.loads(raw)
-            except Exception:
-                await websocket.send_text(json.dumps({
-                    "type": "error",
-                    "detail": "Invalid JSON received."
-                }))
-                continue
-
-            user_message = payload.get("message", "")
-            thread_id = payload.get("thread_id") or str(uuid.uuid4())
-            config = {"configurable": {"thread_id": thread_id}}
-            print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
-
-            input_message = HumanMessage(content=user_message)
-            input_state = {"messages": [input_message]}
-
-            try:
-                # graph_stream = app_runnable_promotion.astream_events(
-                graph_stream = app_runnable_promotion_agentic.astream_events(
-                    input_state, 
-                    config, 
-                    version="v2"
-                )
-                
-                in_direct_response_node = False
-
-                async for evt in graph_stream:
-                    try:
-                        if not isinstance(evt, dict):
-                            continue
-                        
-                        event_type = evt.get("event", "")
-                        event_name = evt.get("name", "")
-                        
-                        # Handle node transitions
-                        if event_type == "on_chain_start" and ("generate_direct_response" in event_name or "generate_response_from_sql" in event_name):
-                            in_direct_response_node = True
-                            continue
-                        
-                        if event_type == "on_chain_end" and ("generate_direct_response" in event_name or "generate_response_from_sql" in event_name):
-                            in_direct_response_node = False
-                            continue
-                        
-                        # Stream chat tokens
-                        if in_direct_response_node and event_type == "on_chat_model_stream":
-                            chunk_data = evt.get("data", {})
-                            chunk = chunk_data.get("chunk")
-                            
-                            if chunk and hasattr(chunk, 'content'):
-                                token_text = chunk.content
-                                if token_text:
-                                    await websocket.send_text(json.dumps({
-                                        "type": "token",
-                                        "text": token_text
-                                    }))
-                        
-                        # **NEW: Stream extraction results when available**
-                        if event_type == "on_chain_end" and "extract_details" in event_name:
-                            extract_output = evt.get("data", {}).get("output", {})
-                            
-                            extracted_details = _to_plain(extract_output.get("extracted_details"))
-                            user_intent = _to_plain(extract_output.get("user_intent"))
-                            
-                            # Send extraction results immediately
-                            await websocket.send_text(json.dumps({
-                                "type": "extraction",
-                                "data": {
-                                    "extracted_details": extracted_details,
-                                    "user_intent": user_intent
-                                }
-                            }))
-                            print(f"[WS] Sent extraction data for thread {thread_id}")
-                            
-                    except WebSocketDisconnect:
-                        raise
-                    except Exception as send_exc:
-                        print(f"Error processing event: {send_exc}")
-                        traceback.print_exc()
-
-                # Stream complete
-                await websocket.send_text(json.dumps({
-                    "type": "done", 
-                    "thread_id": thread_id
-                }))
-                print(f"[WS] Stream complete for thread {thread_id}")
-
-            except WebSocketDisconnect:
-                print(f"Client disconnected during stream (thread {thread_id})")
-                break
-            except Exception as e:
-                print(f"!!! ERROR invoking graph: {e} !!!")
-                traceback.print_exc()
-                try:
-                    await websocket.send_text(json.dumps({
-                        "type": "error",
-                        "detail": f"Error processing chat."
-                    }))
-                except Exception:
-                    pass
-
-    except WebSocketDisconnect:
-        print("WebSocket client disconnected")
-    except Exception as outer_e:
-        print("Unexpected error on websocket:", outer_e)
-        traceback.print_exc()
-    finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
-        
-           
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            raw = await websocket.receive_text()
-            data = json.loads(raw)
-            user_message = data.get("message", "")
-
-            # You can replace the block below with actual LLM streaming logic.
-            # For demo, we *simulate* streaming by chunking the reply and sending
-            # small pieces (tokens) with short sleeps in between.
-            reply = f"Bot reply to: {user_message}"
-
-            # Stream reply chunk-by-chunk
-            chunk_size = 12
-            for i in range(0, len(reply), chunk_size):
-                chunk = reply[i : i + chunk_size]
-                await websocket.send_text(json.dumps({"type": "token", "text": chunk}))
-                await asyncio.sleep(0.06)  # simulate latency / streaming
-
-            # Indicate message is complete
-            await websocket.send_text(json.dumps({"type": "done"}))
-
-    except WebSocketDisconnect:
-        print("Client disconnected")
-        
+    
 #Common Functions:
 #Email Functionality
 @app.post("/filenew")
@@ -692,7 +545,7 @@ def read_invDeatils(inv_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Invoice not found!")
     inv_info = db.query(models.InvDetails).filter(models.InvDetails.invoiceNumber == inv_id).all()
     return { "inv_header":inv,"inv_details":inv_info}
-
+#test endpoint
 @app.post("/ok")  
 async def ok_endpoint(query: str, db: Session = Depends(get_db)):
     # Pass the db session to query_database_function_promo
@@ -905,6 +758,475 @@ async def chat_endpoint(request: ChatRequestInvoice):
 #         traceback.print_exc()
 #         raise HTTPException(status_code=500, detail=f"Error processing chat: {e}")
 
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            data = json.loads(raw)
+            user_message = data.get("message", "")
+
+            # You can replace the block below with actual LLM streaming logic.
+            # For demo, we *simulate* streaming by chunking the reply and sending
+            # small pieces (tokens) with short sleeps in between.
+            reply = f"Bot reply to: {user_message}"
+
+            # Stream reply chunk-by-chunk
+            chunk_size = 12
+            for i in range(0, len(reply), chunk_size):
+                chunk = reply[i : i + chunk_size]
+                await websocket.send_text(json.dumps({"type": "token", "text": chunk}))
+                await asyncio.sleep(0.06)  # simulate latency / streaming
+
+            # Indicate message is complete
+            await websocket.send_text(json.dumps({"type": "done"}))
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
+
+@app.websocket("/ws/purchase_order_chat")
+async def websocket_purchase_order_chat(websocket: WebSocket):
+    """
+    WebSocket that streams both chat tokens AND extracted details.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "detail": "Invalid JSON received."
+                }))
+                continue
+
+            user_message = payload.get("message", "")
+            thread_id = payload.get("thread_id") or str(uuid.uuid4())
+            config = {"configurable": {"thread_id": thread_id}}
+            print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+
+            input_message = HumanMessage(content=user_message)
+            input_state = {"messages": [input_message]}
+
+            try:
+                # graph_stream = app_runnable_promotion.astream_events(
+                graph_stream = app_runnable_purchase_order_agentic.astream_events(
+                    input_state, 
+                    config, 
+                    version="v2"
+                )
+                
+                in_direct_response_node = False
+
+                async for evt in graph_stream:
+                    try:
+                        if not isinstance(evt, dict):
+                            continue
+                        
+                        event_type = evt.get("event", "")
+                        event_name = evt.get("name", "")
+                        
+                        # Handle node transitions
+                        if event_type == "on_chain_start" and ("generate_direct_response" in event_name or "generate_response_from_sql" in event_name):
+                            in_direct_response_node = True
+                            continue
+                        
+                        if event_type == "on_chain_end" and ("generate_direct_response" in event_name or "generate_response_from_sql" in event_name):
+                            in_direct_response_node = False
+                            continue
+                        
+                        # Stream chat tokens
+                        if in_direct_response_node and event_type == "on_chat_model_stream":
+                            chunk_data = evt.get("data", {})
+                            chunk = chunk_data.get("chunk")
+                            
+                            if chunk and hasattr(chunk, 'content'):
+                                token_text = chunk.content
+                                if token_text:
+                                    await websocket.send_text(json.dumps({
+                                        "type": "token",
+                                        "text": token_text
+                                    }))
+                        
+                        # **NEW: Stream extraction results when available**
+                        if event_type == "on_chain_end" and "extract_details" in event_name:
+                            extract_output = evt.get("data", {}).get("output", {})
+                            
+                            extracted_details = _to_plain(extract_output.get("extracted_details"))
+                            user_intent = _to_plain(extract_output.get("user_intent"))
+                            
+                            # Send extraction results immediately
+                            await websocket.send_text(json.dumps({
+                                "type": "extraction",
+                                "data": {
+                                    "extracted_details": extracted_details,
+                                    "user_intent": user_intent
+                                }
+                            }))
+                            print(f"[WS] Sent extraction data for thread {thread_id}")
+                            
+                    except WebSocketDisconnect:
+                        raise
+                    except Exception as send_exc:
+                        print(f"Error processing event: {send_exc}")
+                        traceback.print_exc()
+
+                # Stream complete
+                await websocket.send_text(json.dumps({
+                    "type": "done", 
+                    "thread_id": thread_id
+                }))
+                print(f"[WS] Stream complete for thread {thread_id}")
+
+            except WebSocketDisconnect:
+                print(f"Client disconnected during stream (thread {thread_id})")
+                break
+            except Exception as e:
+                print(f"!!! ERROR invoking graph: {e} !!!")
+                traceback.print_exc()
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "detail": f"Error processing chat."
+                    }))
+                except Exception:
+                    pass
+
+    except WebSocketDisconnect:
+        print("WebSocket client disconnected")
+    except Exception as outer_e:
+        print("Unexpected error on websocket:", outer_e)
+        traceback.print_exc()
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+@app.post("/purchase_order_chat_agentic/")
+async def chat_endpoint_purchase_order_agentic(request: ChatRequestPurchaseOrder):
+    """
+    Receives a ChatRequestPurchaseOrder containing a user message and optional thread_id.
+    Invokes the LangGraph app for purchase order chat, first running ainvoke() to log final outputs,
+    then streams the LLM response back to the client using astream_events().
+    The response is streamed as Server-Sent Events (SSE) with media_type "text/event-stream".
+    Input: JSON body matching ChatRequestPurchaseOrder schema.
+    Output: StreamingResponse of LLM-generated events.
+    """
+    user_message = request.message
+    thread_id = request.thread_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+    print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+
+    input_message = HumanMessage(content=user_message)
+    input_state = {"messages": [input_message]}
+
+    async def event_generator():
+        try:
+            # Run graph and stream results to client (single run)
+            graph_stream = app_runnable_purchase_order_agentic.astream_events(
+                input_state, 
+                config, 
+                version="v2"
+            )
+            print(f"\n--- Graph stream started ---")
+            
+            in_direct_response_node = False
+            
+            async for evt in graph_stream:
+                try:
+                    if not isinstance(evt, dict):
+                        continue
+                    
+                    event_type = evt.get("event", "")
+                    event_name = evt.get("name", "")
+                    
+                    # Handle node transitions
+                    if event_type == "on_chain_start" and ("generate_direct_response" in event_name or "generate_response_from_sql" in event_name):
+                        in_direct_response_node = True
+                        continue
+                    
+                    if event_type == "on_chain_end" and ("generate_direct_response" in event_name or "generate_response_from_sql" in event_name):
+                        in_direct_response_node = False
+                        continue
+                    
+                    # Stream chat tokens
+                    if in_direct_response_node and event_type == "on_chat_model_stream":
+                        chunk_data = evt.get("data", {})
+                        chunk = chunk_data.get("chunk")
+                        
+                        if chunk and hasattr(chunk, 'content'):
+                            token_text = chunk.content
+                            if token_text:
+                                yield f"data: {json.dumps({'type': 'token', 'text': token_text})}\n\n"
+                    
+                    # Stream extraction results when available
+                    if event_type == "on_chain_end" and "extract_details" in event_name:
+                        extract_output = evt.get("data", {}).get("output", {})
+                        
+                        extracted_details = _to_plain(extract_output.get("extracted_details"))
+                        user_intent = _to_plain(extract_output.get("user_intent"))
+                        
+                        # Send extraction results immediately
+                        yield f"data: {json.dumps({'type': 'extraction', 'data': {'extracted_details': extracted_details, 'user_intent': user_intent}})}\n\n"
+                        print(f"[HTTP] Sent extraction data for thread {thread_id}")
+                        
+                except Exception as send_exc:
+                    print(f"Error processing event: {send_exc}")
+                    traceback.print_exc()
+
+            # Stream complete
+            yield f"data: {json.dumps({'type': 'done', 'thread_id': thread_id})}\n\n"
+            print(f"[HTTP] Stream complete for thread {thread_id}")
+
+        except Exception as e:
+            print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'detail': f'Error processing chat: {str(e)}'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+@app.post("/po_extract_details_agentic/")
+async def get_extracted_details_api_agentic(request: ChatRequestPromotion):
+    """
+    Retrieve extracted details from current conversation state.
+    If message is empty, just return current state without processing.
+    """
+    user_message = request.message
+    thread_id = request.thread_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    print(f"\n--- [Thread: {thread_id}] Extract details request: '{user_message}' ---")
+
+    # If message is empty, just retrieve current state without invoking graph
+    if not user_message or not user_message.strip():
+        print("DEBUG: Empty message - retrieving current state only")
+        try:
+            # Get current state from checkpointer without invoking
+            current_state = await app_runnable_purchase_order_agentic.aget_state(config)
+            state_values = current_state.values if hasattr(current_state, 'values') else {}
+            
+            extracted_details_plain = _to_plain(state_values.get("extracted_details"))
+            user_intent_plain = _to_plain(state_values.get("user_intent"))
+            
+            payload = {
+                "extracted_details": extracted_details_plain,
+                "user_intent": user_intent_plain
+            }
+            
+            print("DEBUG: Returning current state payload:", jsonable_encoder(payload))
+            return JSONResponse(content=payload)
+            
+        except Exception as e:
+            print(f"!!! ERROR retrieving state: {e} !!!")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    # Original logic for non-empty messages
+    input_message = HumanMessage(content=user_message)
+    input_state = {"messages": [input_message]}
+
+    try:
+        final_state = await app_runnable_promotion.ainvoke(input_state, config)
+        print("DEBUG: final_state keys:", list(final_state.keys()))
+        # Print repr for quick inspection (careful with large objects)
+        try:
+            print("DEBUG: final_state repr snippet:", repr(final_state)[:2000])
+        except Exception:
+            print("DEBUG: final_state repr: <unprintable>")
+
+        # Attempt to find user_intent in likely locations with debug prints
+        intent_candidates = {}
+        # 1) top-level 'user_intent'
+        top_user_intent = final_state.get("user_intent")
+        print("DEBUG: top-level final_state['user_intent']:", _to_plain(top_user_intent))
+        intent_candidates["top_user_intent"] = top_user_intent
+
+        # 2) top-level 'intent_classifier' block (if present)
+        intent_classifier = final_state.get("intent_classifier")
+        print("DEBUG: final_state['intent_classifier']:", _to_plain(intent_classifier))
+        if isinstance(intent_classifier, dict):
+            intent_candidates["intent_classifier.user_intent"] = intent_classifier.get("user_intent")
+
+        # 3) extract_details node output if present
+        extract_node_data = final_state.get("extract_details")
+        print("DEBUG: final_state['extract_details'] (raw):", _to_plain(extract_node_data))
+
+        if not extract_node_data:
+            # fallback: maybe outputs were flattened into top-level keys
+            extract_node_data = {
+                "extracted_details": final_state.get("extracted_details"),
+                "user_intent": final_state.get("user_intent") or (intent_classifier and intent_classifier.get("user_intent"))
+            }
+            print("DEBUG: constructed fallback extract_node_data:", _to_plain(extract_node_data))
+
+        # Normalize extract_node_data shape (could be pydantic model or dict)
+        if not isinstance(extract_node_data, dict):
+            try:
+                extract_node_data_plain = _to_plain(extract_node_data)
+            except Exception:
+                extract_node_data_plain = {"extracted_details": None, "user_intent": None}
+        else:
+            extract_node_data_plain = extract_node_data
+
+        print("DEBUG: extract_node_data_plain:", extract_node_data_plain)
+
+        # user_intent might itself be a Pydantic model; convert to plain
+        raw_user_intent = extract_node_data_plain.get("user_intent")
+        print("DEBUG: raw_user_intent (before conversion):", repr(raw_user_intent))
+        user_intent_plain = _to_plain(raw_user_intent)
+        print("DEBUG: user_intent_plain (after conversion):", user_intent_plain)
+
+        # extracted_details conversion
+        extracted_details_raw = extract_node_data_plain.get("extracted_details")
+        extracted_details_plain = _to_plain(extracted_details_raw)
+        print("DEBUG: extracted_details_plain:", extracted_details_plain)
+
+        payload = {
+            "extracted_details": extracted_details_plain,
+            "user_intent": user_intent_plain
+        }
+
+        print("DEBUG: Returning payload:", jsonable_encoder(payload))
+        return JSONResponse(content=payload)
+
+    except Exception as e:
+        print(f"!!! ERROR in extract_details API: {e} !!!")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+    # ... rest of your existing code ...
+
+@app.websocket("/ws/promotion_chat")
+async def websocket_promotion_chat(websocket: WebSocket):
+    """
+    WebSocket that streams both chat tokens AND extracted details.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "detail": "Invalid JSON received."
+                }))
+                continue
+
+            user_message = payload.get("message", "")
+            thread_id = payload.get("thread_id") or str(uuid.uuid4())
+            config = {"configurable": {"thread_id": thread_id}}
+            print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
+
+            input_message = HumanMessage(content=user_message)
+            input_state = {"messages": [input_message]}
+
+            try:
+                # graph_stream = app_runnable_promotion.astream_events(
+                graph_stream = app_runnable_promotion_agentic.astream_events(
+                    input_state, 
+                    config, 
+                    version="v2"
+                )
+                
+                in_direct_response_node = False
+
+                async for evt in graph_stream:
+                    try:
+                        if not isinstance(evt, dict):
+                            continue
+                        
+                        event_type = evt.get("event", "")
+                        event_name = evt.get("name", "")
+                        
+                        # Handle node transitions
+                        if event_type == "on_chain_start" and ("generate_direct_response" in event_name or "generate_response_from_sql" in event_name):
+                            in_direct_response_node = True
+                            continue
+                        
+                        if event_type == "on_chain_end" and ("generate_direct_response" in event_name or "generate_response_from_sql" in event_name):
+                            in_direct_response_node = False
+                            continue
+                        
+                        # Stream chat tokens
+                        if in_direct_response_node and event_type == "on_chat_model_stream":
+                            chunk_data = evt.get("data", {})
+                            chunk = chunk_data.get("chunk")
+                            
+                            if chunk and hasattr(chunk, 'content'):
+                                token_text = chunk.content
+                                if token_text:
+                                    await websocket.send_text(json.dumps({
+                                        "type": "token",
+                                        "text": token_text
+                                    }))
+                        
+                        # **NEW: Stream extraction results when available**
+                        if event_type == "on_chain_end" and "extract_details" in event_name:
+                            extract_output = evt.get("data", {}).get("output", {})
+                            
+                            extracted_details = _to_plain(extract_output.get("extracted_details"))
+                            user_intent = _to_plain(extract_output.get("user_intent"))
+                            
+                            # Send extraction results immediately
+                            await websocket.send_text(json.dumps({
+                                "type": "extraction",
+                                "data": {
+                                    "extracted_details": extracted_details,
+                                    "user_intent": user_intent
+                                }
+                            }))
+                            print(f"[WS] Sent extraction data for thread {thread_id}")
+                            
+                    except WebSocketDisconnect:
+                        raise
+                    except Exception as send_exc:
+                        print(f"Error processing event: {send_exc}")
+                        traceback.print_exc()
+
+                # Stream complete
+                await websocket.send_text(json.dumps({
+                    "type": "done", 
+                    "thread_id": thread_id
+                }))
+                print(f"[WS] Stream complete for thread {thread_id}")
+
+            except WebSocketDisconnect:
+                print(f"Client disconnected during stream (thread {thread_id})")
+                break
+            except Exception as e:
+                print(f"!!! ERROR invoking graph: {e} !!!")
+                traceback.print_exc()
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "detail": f"Error processing chat."
+                    }))
+                except Exception:
+                    pass
+
+    except WebSocketDisconnect:
+        print("WebSocket client disconnected")
+    except Exception as outer_e:
+        print("Unexpected error on websocket:", outer_e)
+        traceback.print_exc()
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        
 @app.post("/promotion_chat/")
 async def chat_endpoint_promotion(request: ChatRequestPromotion):
     """
@@ -991,7 +1313,7 @@ async def chat_endpoint_promotion_agentic(request: ChatRequestPromotion):
 #     )
        
 # @app.post("/promotion_extract_details/")
-# async def get_extract_details_api(request: ChatRequestPromotion):
+# async def get_extracted_details_api(request: ChatRequestPromotion):
 #     """
 #     Run the graph for one turn and return only the extract_details output (no streaming).
 #     """
@@ -1065,7 +1387,7 @@ def _to_plain(obj):
         return str(obj)
 
 # @app.post("/promotion_extract_details/")
-# async def get_extract_details_api(request: ChatRequestPromotion):
+# async def get_extracted_details_api(request: ChatRequestPromotion):
 #     """
 #     Run the graph for one turn and return only the extract_details output (no streaming).
 #     This instrumented version prints user_intent at many stages for debugging.
@@ -1150,7 +1472,7 @@ def _to_plain(obj):
 
 
 @app.post("/promotion_extract_details/")
-async def get_extract_details_api(request: ChatRequestPromotion):
+async def get_extracted_details_api(request: ChatRequestPromotion):
     """
     Retrieve extracted details from current conversation state.
     If message is empty, just return current state without processing.
@@ -1260,7 +1582,7 @@ async def get_extract_details_api(request: ChatRequestPromotion):
     # ... rest of your existing code ...
 
 @app.post("/promotion_extract_details_agentic/")
-async def get_extract_details_api_agentic(request: ChatRequestPromotion):
+async def get_extracted_details_api_agentic(request: ChatRequestPromotion):
     """
     Retrieve extracted details from current conversation state.
     If message is empty, just return current state without processing.

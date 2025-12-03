@@ -29,6 +29,7 @@ Return the response as a valid JSON object where each key is one of the fields a
   
 If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
 """
+
 template_Promotion_without_date = """  
 Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your promotion operations and provide seamless support. Today is {current_date}.  
 
@@ -336,6 +337,122 @@ Upon receiving a 'Yes' response, inquire whether the user would like the documen
 If you respond with an email id, I'll confirm with "Email sent successfully to [received email id].".
 
 """
+
+item_database_table="""
+Database Schema:
+
+1. `itemmaster` (Alias: im) (Base Table for Item Details):
+   - `itemId` (VARCHAR/INT): Unique identifier for each item. (Primary Key)
+   - `itemDescription` (VARCHAR): Primary description of the item.
+   - `itemSecondaryDescription` (VARCHAR): Additional details about the item.
+   - `itemDepartment` (VARCHAR): Broader category (e.g., T-Shirt, Trousers, Jackets). Use LIKE 'value%' for filtering.
+   - `itemClass` (VARCHAR): Classification within a department (e.g., Formals, Casuals, Leather). Use LIKE 'value%' for filtering.
+   - `itemSubClass` (VARCHAR): Granular classification (e.g., Full Sleeve, Half Sleeve, Zipper, Regular Fit). Use LIKE 'value%' for filtering.
+   - `brand` (VARCHAR): Brand associated with the item (e.g., Zara, Adidas, H&M). Use = 'value' for filtering.
+   - `diffType1` (INT): Foreign key linking to `itemdiffs.id` (e.g., for color).
+   - `diffType2` (INT): Foreign key linking to `itemdiffs.id` (e.g., for size).
+   - `diffType3` (INT): Foreign key linking to `itemdiffs.id` (e.g., for material).
+
+2. `itemsupplier` (Alias: isup) (For Cost & Supplier Data):
+   - `id` (INT): Unique identifier for this relationship. (Primary Key)
+   - `supplierCost` (DECIMAL/FLOAT): Cost of the item from the supplier.
+   - `supplierId` (VARCHAR/INT): Identifier for the supplier.
+   - `itemId` (VARCHAR/INT): Foreign key linking to `itemmaster.itemId`.
+
+3. `itemdiffs` (Alias: idf) (For Attribute Filtering - Differentiation Types):
+   - `id` (INT): Unique identifier for each differentiation attribute. (Primary Key)
+   - `diffType` (VARCHAR): The attribute type (e.g., 'color', 'size', 'material'). Often used with diffId.
+   - `diffId` (VARCHAR): The actual differentiation value (e.g., 'Red', 'XL', 'Cotton'). Use = 'value' for filtering.
+
+4. `storedetails` (Alias: sd) (For Store Information):
+   - `storeId` (INT): Unique identifier for each store. (Primary Key)
+   - `storeName` (VARCHAR): Name of the store.
+   - `address` (VARCHAR): Street address.
+   - `city` (VARCHAR): City.
+   - `state` (VARCHAR): State.
+   - `zipCode` (VARCHAR): ZIP code.
+   - `phone` (VARCHAR): Contact phone number.
+
+Relationships:
+- `itemmaster.itemId` links to `itemsupplier.itemId`. JOIN using `ON im.itemId = isup.itemId`.
+- `itemmaster.diffType1`, `itemmaster.diffType2`, `itemmaster.diffType3` link to `itemdiffs.id`.
+"""
+
+promotion_intent_system = (
+    "You are a highly reliable intent classification engine for a promotions chatbot.\n"
+    "**Your job**: Given three lines of context—'Previous Bot,' 'Current User,' and 'Current Bot'—decide which of these intents the user is expressing *right now*:\n\n"
+    
+    "  1. **Promotion Creation**  \n"
+    "     The user is explicitly initiating a brand-new promotion.  \n"
+    "     *Trigger phrases* include 'I want to create a promotion,' 'Let's make a promo,' 'Start a new discount,' etc.\n\n"
+
+    "  2. **Submission**  \n"
+    "     CRITICAL: Submission occurs when:\n"
+    "       - Previous Bot: Contains 'Would you like to submit this information?'\n"
+    "       - Current User: User confirms (e.g., 'Yes', 'Sure', 'Confirm')\n"
+    "       - Current Bot: Bot replies with success message ('successfully created', 'Thank you')\n\n"
+    
+    "     IMPORTANT: Even if Current Bot ALSO asks about email in the same message, this is STILL Submission (not Email Fetching).\n"
+    "     Email Fetching only occurs AFTER the user responds to the email question.\n\n"
+    
+    "     ✅ CORRECT Example (IS Submission, even with email question):\n"
+    "       Previous Bot: Would you like to submit this information?\n"
+    "       Current User: Yes\n"
+    "       Current Bot: Promotion created successfully. Would you like the document sent to your email?\n"
+    "       → This IS 'Submission' (user just confirmed submission, hasn't answered email yet)\n\n"
+    
+    "  3. **Detail Filling**  \n"
+    "     The user is providing or updating promotion fields, or the bot is asking for missing information.\n"
+    "     If the bot is asking 'Would you like to submit?', classify as Detail Filling.\n\n"
+    
+    "  4. **Email Fetching**  \n"
+    "     CRITICAL: Email Fetching ONLY occurs when the user is RESPONDING to an email question:\n"
+    "       - Previous Bot: Must ask 'Would you like the document sent to your email?' (AND contain success message)\n"
+    "       - Current User: User responds to the email question (e.g., 'Yes', 'user@example.com', 'No thanks')\n"
+    "       - Current Bot: Bot processes the email response (e.g., 'Please provide your email', 'Email sent', 'Understood')\n\n"
+    
+    "     KEY RULE: If Current Bot is the FIRST message asking about email, this is NOT Email Fetching yet.\n"
+    "     Email Fetching only happens when the user has ALREADY been asked and is now responding.\n\n"
+    
+    "     ❌ WRONG Example (NOT Email Fetching):\n"
+    "       Previous Bot: Would you like to submit?\n"
+    "       Current User: Yes\n"
+    "       Current Bot: Promotion created successfully. Would you like the document sent to your email?\n"
+    "       → This is 'Submission', NOT 'Email Fetching' (bot is asking for the FIRST time)\n\n"
+    
+    "     ✅ CORRECT Example (IS Email Fetching):\n"
+    "       Previous Bot: Promotion created successfully. Would you like the document sent to your email?\n"
+    "       Current User: Yes\n"
+    "       Current Bot: Please provide your email address.\n"
+    "       → This IS 'Email Fetching' (user is responding to email question)\n\n"
+    
+    "     ✅ CORRECT Example 2 (IS Email Fetching):\n"
+    "       Previous Bot: Promotion created successfully. Would you like the document sent to your email?\n"
+    "       Current User: user@example.com\n"
+    "       Current Bot: Email sent successfully to user@example.com\n"
+    "       → This IS 'Email Fetching' (user provided email in response to question)\n\n"
+    
+    "  5. **Other**  \n"
+    "     Anything that doesn't fit the above.\n\n"
+    
+    "**Rules (in strict order - FOLLOW EXACTLY):**:\n"
+    "  1. If Current Bot asks 'Would you like to submit' → return 'Detail Filling'. STOP.\n"
+    "  2. If Previous Bot asked 'Would you like to submit' AND Current User said 'Yes' AND Current Bot has success message → return 'Submission'. STOP.\n"
+    "     (Even if Current Bot also asks about email, it's still Submission because user just confirmed submission)\n"
+    "  3. If Previous Bot asked about email AND Current User is responding about email AND Current Bot is processing email response → return 'Email Fetching'. STOP.\n"
+    "  4. If Current User initiates new promotion → return 'Promotion Creation'. STOP.\n"
+    "  5. If Current User mentions promotion fields → return 'Detail Filling'. STOP.\n"
+    "  6. Otherwise → return 'Other'.\n\n"
+    
+    "**CRITICAL: The difference between Submission and Email Fetching:**\n"
+    "- Submission = User responding to 'submit?' question\n"
+    "- Email Fetching = User responding to 'email?' question\n"
+    "- If bot asks BOTH in same message, classify based on what the user is responding to\n"
+    "- If user just said 'Yes' to submission, it's Submission (even if bot asks about email next)\n\n"
+    
+    "**Return exactly** a JSON object with one key: `intent`, whose value is one of:\n"
+    "  [\"Promotion Creation\", \"Detail Filling\", \"Submission\", \"Email Fetching\", \"Other\"]\n"
+)
 
 template_Promotion_without_date_old = """  
 Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your promotion operations and provide seamless support. Today is {current_date}.  
@@ -776,32 +893,136 @@ The user wants to query the MySQL database.Generate a **pure SQL query** without
     ### **Handling Special Characters & Spaces**
 """
 
-po_extraction_prompt = f"""
+# po_extraction_prompt = f"""
+# Extract the following purchase order details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
+#   - "value": the extracted field value (or null if missing).
+#   - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
+
+# The fields and their expected formats are:
+
+# - **Supplier ID** → (alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID")  
+# - **Estimated Delivery Date** → (formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery")  
+# - **Total Quantity** → (sum of all item quantities)  
+# - **Total Cost** → (sum of all item costs)  
+# - **Total Tax** → (10% of total cost)  
+# - **Items** → (Array of objects, each containing):  
+#     - **Item ID** → (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
+#     - **Quantity** → (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
+#     - **Cost Per Unit** → (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
+# - **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
+
+
+# Use the exact field names as provided above. If a value is missing, set "value" to null (or [] for arrays) and "is_example" to false.
+
+# Return the response as a valid JSON object where each key is one of the fields and its value is an object in the form:
+#     "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}
+  
+# If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
+# """
+
+po_extraction_prompt = """
 Extract the following purchase order details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
-  - "value": the extracted field value (or null if missing).
-  - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
-
+ - "value": the extracted field value (or null if missing).
+ - "is_example": true if the extracted value appears to be just an example instruction (e.g. containing phrases like "for example", "e.g.", "such as"), false otherwise.
+ 
 The fields and their expected formats are:
+ 
+ - **Supplier ID**: alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID"
+ - **Estimated Delivery Date**: formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery"
+ - **Total Quantity**: sum of all item quantities (numeric)
+ - **Total Cost**: sum of all item costs (numeric)
+ - **Total Tax**: 10% of total cost (numeric)
+ - **Items**: Array of objects, each containing:
+  - **Item ID**: alphanumeric, may appear as "Product Code", "SKU", "Item No."
+  - **Quantity**: numeric, may appear as "Qty", "Quantity Ordered", "Units"
+  - **Cost Per Unit**: numeric, may appear as "Unit Price", "Rate", "Price per Item"
+ - **Email**: A valid email address (e.g., user@example.com).
 
-- **Supplier ID** → (alphanumeric, may be labeled as "Supplier", "Supplier Code", "Vendor ID")  
-- **Estimated Delivery Date** → (formatted as dd/mm/yyyy, may appear as "Delivery Date", "Expected Date", "Est. Delivery")  
-- **Total Quantity** → (sum of all item quantities)  
-- **Total Cost** → (sum of all item costs)  
-- **Total Tax** → (10% of total cost)  
-- **Items** → (Array of objects, each containing):  
-    - **Item ID** → (alphanumeric, may appear as "Product Code", "SKU", "Item No.")  
-    - **Quantity** → (numeric, may appear as "Qty", "Quantity Ordered", "Units")  
-    - **Cost Per Unit** → (numeric, may appear as "Unit Price", "Rate", "Price per Item")  
-- **Email**: A valid email address where the email format follows standard conventions (e.g., user@example.com).
+Use the exact field names as given above.
 
-
-Use the exact field names as provided above. If a value is missing, set "value" to null (or [] for arrays) and "is_example" to false.
+**Purchase Order Text:**
+{{extracted_text}}
 
 Return the response as a valid JSON object where each key is one of the fields and its value is an object in the form:
-    "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}
-  
+  "Field Name": {{ "value": "<extracted_value>", "is_example": "<true/false>" }}
+ 
 If a field's value is missing, return null (or an empty array for fields expected to be arrays) and set "is_example" to false.
 """
+purchase_order_intent_system = (
+    "You are a highly reliable intent classification engine for a purchase orders chatbot.\n"
+    "**Your job**: Given three lines of context—'Previous Bot,' 'Current User,' and 'Current Bot'—decide which of these intents the user is expressing *right now*:\n\n"
+
+    "  1. **Purchase Order Creation**  \n"
+    "     The user is explicitly initiating a brand-new purchase order (PO).\n"
+    "     *Trigger phrases* include 'I want to create a purchase order,' 'Create a PO,' 'Place an order,' 'Start a purchase order,' 'Open a new PO for vendor X,' etc.\n\n"
+
+    "  2. **Submission**  \n"
+    "     CRITICAL: Submission occurs when:\n"
+    "       - Previous Bot: Contains 'Would you like to submit this information?'\n"
+    "       - Current User: User confirms (e.g., 'Yes', 'Sure', 'Confirm')\n"
+    "       - Current Bot: Bot replies with success message ('purchase order created successfully', 'PO created', 'Order placed', 'Thank you')\n\n"
+
+    "     IMPORTANT: Even if Current Bot ALSO asks about email in the same message, this is STILL Submission (not Email Fetching).\n"
+    "     Email Fetching only occurs AFTER the user responds to the email question.\n\n"
+
+    "     ✅ CORRECT Example (IS Submission, even with email question):\n"
+    "       Previous Bot: Would you like to submit this information?\n"
+    "       Current User: Yes\n"
+    "       Current Bot: Purchase order created successfully. Would you like the document sent to your email?\n"
+    "       → This IS 'Submission' (user just confirmed submission, hasn't answered email yet)\n\n"
+
+    "  3. **Detail Filling**  \n"
+    "     The user is providing or updating purchase order fields, or the bot is asking for missing information.\n"
+    "     Typical PO fields: vendor, line items, quantities, unit price, total, account/GL code, delivery date, shipping address, billing address, approval status, PO number.\n"
+    "     If the bot is asking 'Would you like to submit?', classify as Detail Filling.\n\n"
+
+    "  4. **Email Fetching**  \n"
+    "     CRITICAL: Email Fetching ONLY occurs when the user is RESPONDING to an email question:\n"
+    "       - Previous Bot: Must ask 'Would you like the document sent to your email?' (AND contain success message)\n"
+    "       - Current User: User responds to the email question (e.g., 'Yes', 'user@example.com', 'No thanks')\n"
+    "       - Current Bot: Bot processes the email response (e.g., 'Please provide your email', 'Email sent', 'Understood')\n\n"
+    "     KEY RULE: If Current Bot is the FIRST message asking about email, this is NOT Email Fetching yet.\n"
+    "     Email Fetching only happens when the user has ALREADY been asked and is now responding.\n\n"
+
+    "     ❌ WRONG Example (NOT Email Fetching):\n"
+    "       Previous Bot: Would you like to submit?\n"
+    "       Current User: Yes\n"
+    "       Current Bot: Purchase order created successfully. Would you like the document sent to your email?\n"
+    "       → This is 'Submission', NOT 'Email Fetching' (bot is asking for the FIRST time)\n\n"
+
+    "     ✅ CORRECT Example (IS Email Fetching):\n"
+    "       Previous Bot: Purchase order created successfully. Would you like the document sent to your email?\n"
+    "       Current User: Yes\n"
+    "       Current Bot: Please provide your email address.\n"
+    "       → This IS 'Email Fetching' (user is responding to email question)\n\n"
+
+    "     ✅ CORRECT Example 2 (IS Email Fetching):\n"
+    "       Previous Bot: Purchase order created successfully. Would you like the document sent to your email?\n"
+    "       Current User: user@example.com\n"
+    "       Current Bot: Email sent successfully to user@example.com\n"
+    "       → This IS 'Email Fetching' (user provided email in response to question)\n\n"
+
+    "  5. **Other**  \n"
+    "     Anything that doesn't fit the above.\n\n"
+
+    "**Rules (in strict order - FOLLOW EXACTLY):**:\n"
+    "  1. If Current Bot asks 'Would you like to submit' → return 'Detail Filling'. STOP.\n"
+    "  2. If Previous Bot asked 'Would you like to submit' AND Current User said 'Yes' AND Current Bot has success message → return 'Submission'. STOP.\n"
+    "     (Even if Current Bot also asks about email, it's still Submission because user just confirmed submission)\n"
+    "  3. If Previous Bot asked about email AND Current User is responding about email AND Current Bot is processing email response → return 'Email Fetching'. STOP.\n"
+    "  4. If Current User initiates new purchase order → return 'Purchase Order Creation'. STOP.\n"
+    "  5. If Current User mentions purchase order fields → return 'Detail Filling'. STOP.\n"
+    "  6. Otherwise → return 'Other'.\n\n"
+
+    "**CRITICAL: The difference between Submission and Email Fetching:**\n"
+    "- Submission = User responding to 'submit?' question\n"
+    "- Email Fetching = User responding to 'email?' question\n"
+    "- If bot asks BOTH in same message, classify based on what the user is responding to\n"
+    "- If user just said 'Yes' to submission, it's Submission (even if bot asks about email next)\n\n"
+
+    "**Return exactly** a JSON object with one key: `intent`, whose value is one of:\n"
+    "  [\"Purchase Order Creation\", \"Detail Filling\", \"Submission\", \"Email Fetching\", \"Other\"]\n"
+)
 
 template_Invoice_without_date="""
 Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your invoice operations and provide seamless support.Today is {current_date}. 
