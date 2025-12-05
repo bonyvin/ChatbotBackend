@@ -510,16 +510,15 @@ def create_invDetail(invDetailData: List[invDetailsCreate], db: Session = Depend
         "message":"Items added Sucessfully!"
     }
 
-# @app.get("/poDetails/{po_id}")
-# def read_poDeatils(po_id: str, db: Session = Depends(get_db)):
-#     po = db.query(models.PoHeader).filter(models.PoHeader.poNumber == po_id).first()
-#     if po is None:
-#         detail = "Po Number is not found in our database! Please add a valid PO number!"
-#         conversation.append('Bot: ' + detail)
-#         raise HTTPException(status_code=404, detail=conversation)
-        
-#     po_info = db.query(models.PoDetails).filter(models.PoDetails.poId == po_id).all()
-#     return { "po_header":po,"po_details":po_info}
+
+
+@app.get("/poDetails/{po_id}")
+def read_poDetails(po_id: str, db: Session = Depends(get_db)):
+    po = db.query(models.PoHeader).filter(models.PoHeader.poNumber == po_id).first()   
+    if po is None:
+        raise HTTPException(status_code=404, detail="Purchase Order not found!")
+    po_info = db.query(models.PoDetails).filter(models.PoDetails.poId == po_id).all()
+    return { "po_header":po,"po_details":po_info}
 
 # @app.post("/invoiceValidation")
 # def po_data_validations(po_id:str,detail:Dict[str,int],db: Session = Depends(get_db)):

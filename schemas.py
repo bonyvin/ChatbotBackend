@@ -28,6 +28,7 @@ class PromotionDetailsSchema(BaseModel):
     itemId :str
     discountType :str
     discountValue:float
+    
 #ITEM
 class ItemMasterSchema(BaseModel):
     itemId :str
