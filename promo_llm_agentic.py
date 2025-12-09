@@ -10,7 +10,7 @@ import operator
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse # Import StreamingResponse
 from fastapi_mail import FastMail, MessageSchema, MessageType
-from pydantic import AliasChoices, BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field,field_validator
 from dotenv import load_dotenv
 from sqlalchemy import text
 from requests import Session # Assuming Session is used within get_db
@@ -33,6 +33,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
 from llm_templates import template_Promotion_without_date,promotion_extraction_prompt,item_database_table,promotion_intent_system
+from llm_extractors import UserIntent,intent_extractor_llm_structured,intent_extractor_llm ,llm_tool_test,_to_plain,unwrap_nested_values
+
 # from promoUtils import template_Promotion_without_date
 from langchain_core.tools import tool
 from send_email import conf 
@@ -111,34 +113,114 @@ print(f"LangSmith project: {os.getenv('LANGCHAIN_PROJECT')}")
 
 #All Classes
 # --- Tool Definition / Pydantic Models ---
-class ExtractedPromotionDetails(BaseModel):
-    promotion_type: str | None = Field(None, validation_alias=AliasChoices('Promotion Type', 'promotion_type'))
+# class ExtractedPromotionDetails(BaseModel):
+#     promotion_type: str | None = Field(None, validation_alias=AliasChoices('Promotion Type', 'promotion_type'))
 
-    hierarchy_type: List[str] | None = Field(default=None, validation_alias=AliasChoices('Hierarchy Type', 'hierarchy_type'))
-    hierarchy_value: List[str] | None = Field(default=None, validation_alias=AliasChoices('Hierarchy Value', 'hierarchy_value'))
-    brand: List[str] | None = Field(default=None, validation_alias=AliasChoices('Brand', 'brand'))
+#     hierarchy_type: List[str] | None = Field(default=None, validation_alias=AliasChoices('Hierarchy Type', 'hierarchy_type'))
+#     hierarchy_value: List[str] | None = Field(default=None, validation_alias=AliasChoices('Hierarchy Value', 'hierarchy_value'))
+#     brand: List[str] | None = Field(default=None, validation_alias=AliasChoices('Brand', 'brand'))
     
-    # Changed: Allow None or List
-    items: List[str] | None = Field(default=None, validation_alias=AliasChoices('Items', 'items'))
-    excluded_items: List[str] | None = Field(default=None, validation_alias=AliasChoices('Excluded Items', 'excluded_items'))
+#     # Changed: Allow None or List
+#     items: List[str] | None = Field(default=None, validation_alias=AliasChoices('Items', 'items'))
+#     excluded_items: List[str] | None = Field(default=None, validation_alias=AliasChoices('Excluded Items', 'excluded_items'))
     
-    discount_type: str | None = Field(None, validation_alias=AliasChoices('Discount Type', 'discount_type'))
-    discount_value: str | None = Field(None, validation_alias=AliasChoices('Discount Value', 'discount_value'))
-    start_date: str | None = Field(None, validation_alias=AliasChoices('Start Date', 'start_date'))
-    end_date: str | None = Field(None, validation_alias=AliasChoices('End Date', 'end_date'))
+#     discount_type: str | None = Field(None, validation_alias=AliasChoices('Discount Type', 'discount_type'))
+#     discount_value: str | None = Field(None, validation_alias=AliasChoices('Discount Value', 'discount_value'))
+#     start_date: str | None = Field(None, validation_alias=AliasChoices('Start Date', 'start_date'))
+#     end_date: str | None = Field(None, validation_alias=AliasChoices('End Date', 'end_date'))
     
-    # Changed: Allow None or List
-    stores: List[str] | None = Field(default=None, validation_alias=AliasChoices('Stores', 'stores'))
-    excluded_stores: List[str] | None = Field(default=None, validation_alias=AliasChoices('Excluded Stores', 'excluded_stores'))
+#     # Changed: Allow None or List
+#     stores: List[str] | None = Field(default=None, validation_alias=AliasChoices('Stores', 'stores'))
+#     excluded_stores: List[str] | None = Field(default=None, validation_alias=AliasChoices('Excluded Stores', 'excluded_stores'))
     
-    email: str | None = Field(None, validation_alias=AliasChoices('Email', 'email'))
+#     email: str | None = Field(None, validation_alias=AliasChoices('Email', 'email'))
+
+#     class Config:
+#         populate_by_name = True
+#         extra = 'ignore'
+
+# class UserIntent(BaseModel):
+#     intent: str | None = Field(None)
+class ExtractedPromotionDetails(BaseModel):
+    promotion_type: Optional[str] = Field(None, validation_alias=AliasChoices('Promotion Type', 'promotion_type'))
+    hierarchy_type: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices('Hierarchy Type', 'hierarchy_type'))
+    hierarchy_value: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices('Hierarchy Value', 'hierarchy_value'))
+    brand: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices('Brand', 'brand'))
+    items: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices('Items', 'items'))
+    excluded_items: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices('Excluded Items', 'excluded_items'))
+    discount_type: Optional[str] = Field(None, validation_alias=AliasChoices('Discount Type', 'discount_type'))
+    discount_value: Optional[str] = Field(None, validation_alias=AliasChoices('Discount Value', 'discount_value'))
+    start_date: Optional[str] = Field(None, validation_alias=AliasChoices('Start Date', 'start_date'))
+    end_date: Optional[str] = Field(None, validation_alias=AliasChoices('End Date', 'end_date'))
+    stores: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices('Stores', 'stores'))
+    excluded_stores: Optional[List[str]] = Field(default=None, validation_alias=AliasChoices('Excluded Stores', 'excluded_stores'))
+    email: Optional[str] = Field(None, validation_alias=AliasChoices('Email', 'email'))
+
+    @field_validator(
+        'promotion_type',
+        'discount_type',
+        'discount_value',
+        'start_date',
+        'end_date',
+        'email',
+        mode='before'
+    )
+    @classmethod
+    def extract_scalar_value(cls, v: Any) -> Any:
+        """Extract value from nested dict structure for scalar fields"""
+        if v is None:
+            return None
+        if isinstance(v, dict) and 'value' in v:
+            return v['value']
+        return v
+
+    @field_validator(
+        'hierarchy_type',
+        'hierarchy_value',
+        'brand',
+        'items',
+        'excluded_items',
+        'stores',
+        'excluded_stores',
+        mode='before'
+    )
+    @classmethod
+    def extract_list_value(cls, v: Any) -> Any:
+        """Extract value from nested dict structure for list fields"""
+        if v is None:
+            return None
+        
+        # If it's wrapped in {value: ..., is_example: ...}
+        if isinstance(v, dict) and 'value' in v:
+            v = v['value']
+        
+        # Ensure it's a list
+        if v is None:
+            return None
+        
+        if not isinstance(v, list):
+            # If it's a single string, wrap it in a list
+            if isinstance(v, str):
+                return [v]
+            return None
+        
+        # Process each item in the list (in case items are also wrapped)
+        processed_items = []
+        for item in v:
+            if isinstance(item, dict) and 'value' in item:
+                processed_items.append(item['value'])
+            else:
+                processed_items.append(item)
+        
+        return processed_items if processed_items else None
 
     class Config:
         populate_by_name = True
         extra = 'ignore'
 
-class UserIntent(BaseModel):
-    intent: str | None = Field(None)
+
+
+
 
 # --- API Request Model Class---
 class ChatRequestPromotion(BaseModel):
@@ -171,13 +253,7 @@ extractor_llm_structured = extractor_llm.with_structured_output(
 
 # intent extraction llm can be initiated in main file as it is being used in multiple files
 # New LLM chain definitions for intent extraction in extract details
-intent_extractor_llm = ChatOpenAI(
-    model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.0
-)
-intent_extractor_llm_structured = intent_extractor_llm.with_structured_output(
-    UserIntent, method="function_calling", include_raw=False
-)
-llm_tool_test = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
 
 # --- Database Schema and Helper Functions ---
 TABLE_SCHEMA = item_database_table
@@ -760,46 +836,183 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
     # The client stream is handled by astream_events processing the same LLM call
     return {"llm_response_content": final_content, "messages": [response_message]}
 
-def _to_plain(obj):
-    """Return a plain-serializable Python object from dict / pydantic v1/v2 / simple values."""
-    if obj is None:
-        return None
-    if isinstance(obj, (dict, list, str, int, float, bool)):
-        return obj
-    # Pydantic v2
-    if hasattr(obj, "model_dump"):
-        try:
-            return obj.model_dump()
-        except Exception:
-            pass
-    # Pydantic v1
-    if hasattr(obj, "dict"):
-        try:
-            return obj.dict()
-        except Exception:
-            pass
-    # fallback to jsonable_encoder
-    try:
-        return jsonable_encoder(obj)
-    except Exception:
-        return str(obj)
+
 
 intent_system =promotion_intent_system
 
 # Replace your existing extract_details with this version
+# async def extract_details(state: GraphState) -> Dict:
+#     """
+#     Node to extract structured promotion details and user intent from the conversation so far.
+#     Returns:
+#       - extracted_details
+#       - user_intent
+#     This version prints user_intent at several stages for debugging.
+#     """
+#     print("--- Node: extract_details (ENTER) ---")
+#     extracted_data: Optional[ExtractedPromotionDetails] = None
+#     user_intent: Optional[UserIntent] = None
+
+#     # Build chat_history string (unchanged)
+#     chat_history_lines: List[str] = []
+#     for msg in state.get("messages", []):
+#         if isinstance(msg, HumanMessage):
+#             chat_history_lines.append(f"User: {msg.content}")
+#         elif isinstance(msg, AIMessage):
+#             chat_history_lines.append(f"Bot: {msg.content}")
+#         else:
+#             if hasattr(msg, "content"):
+#                 chat_history_lines.append(f"Bot: {msg.content}")
+#     chat_history_str = "\n".join(chat_history_lines)
+
+#     # build missing_fields (unchanged)
+#     prev: Optional[ExtractedPromotionDetails] = state.get("extracted_details")
+#     missing_fields: List[str] = []
+#     if prev is None or not getattr(prev, "promotion_type", None):
+#         missing_fields.append("Promotion Type")
+#     if prev is None or not getattr(prev, "hierarchy_type", None):
+#         missing_fields.append("Hierarchy Level Type")
+#     if prev is None or not getattr(prev, "hierarchy_value", None):
+#         missing_fields.append("Hierarchy Level Value")
+#     if prev is None or not getattr(prev, "brand", None):
+#         missing_fields.append("Brand")
+#     if prev is None or not getattr(prev, "items", None):
+#         missing_fields.append("Items")
+#     if prev is None or not getattr(prev, "discount_type", None):
+#         missing_fields.append("Discount Type")
+#     if prev is None or not getattr(prev, "discount_value", None):
+#         missing_fields.append("Discount Value")
+#     if prev is None or not getattr(prev, "start_date", None):
+#         missing_fields.append("Start Date")
+#     if prev is None or not getattr(prev, "end_date", None):
+#         missing_fields.append("End Date")
+#     if prev is None or not getattr(prev, "stores", None):
+#         missing_fields.append("Stores")
+#     if prev is None or not getattr(prev, "email", None):
+#         missing_fields.append("Email")
+
+#     missing_fields_str = "\n".join(f"- {f}" for f in missing_fields) if missing_fields else "None"
+
+#     # prepare prompt_filled (unchanged)
+#     current_date = datetime.date.today().strftime("%d/%m/%Y")
+#     try:
+#         prompt_filled = promotion_extraction_prompt \
+#             .replace("{{extracted_text}}", chat_history_str) 
+#     except Exception as e:
+#         print(f"Error formatting template_Promotion_without_date: {e}")
+#         prompt_filled = promotion_extraction_prompt
+
+#     # 4. Invoke structured extractor LLM
+#     try:
+#         detail_prompt = ChatPromptTemplate.from_messages([
+#             ("system", prompt_filled)
+#         ])
+#         print("--- extract_details: invoking extractor_llm_structured ---")
+#         llm_result = await (detail_prompt | extractor_llm_structured).ainvoke({})
+#         print("--- extract_details: extractor_llm_structured returned ---")
+#         # Debug print raw llm_result
+#         try:
+#             print("RAW llm_result (repr):", repr(llm_result))
+#         except Exception:
+#             print("RAW llm_result: <unprintable>")
+
+#         if isinstance(llm_result, ExtractedPromotionDetails):
+#             extracted_data = llm_result
+#             print("--- extract_details: extracted_data populated ---")
+#             print("extracted_data (plain):", _to_plain(extracted_data))
+#         else:
+#             print("--- Warning: extract_details: LLM returned unexpected type:", type(llm_result))
+#             # Attempt to salvage if the LLM returned a dict-like shape
+#             try:
+#                 extracted_data = _to_plain(llm_result)
+#                 print("extract_details: salvaged extracted_data:", extracted_data)
+#             except Exception:
+#                 pass
+#     except Exception as e:
+#         print(f"!!! ERROR during promotion detail extraction: {e} !!!")
+#         traceback.print_exc()
+
+#     # 5. Extract user intent (with verbose prints)
+#     try:
+#         print("--- extract_details: Starting intent extraction ---")
+#         last_bot_message = None
+#         current_user_message = None
+#         current_bot_message = None
+
+#         relevant_msgs = [msg for msg in state.get("messages", []) if isinstance(msg, (HumanMessage, AIMessage))]
+#         human_msgs = [msg for msg in relevant_msgs if isinstance(msg, HumanMessage)]
+#         ai_msgs = [msg for msg in relevant_msgs if isinstance(msg, AIMessage)]
+
+#         if len(ai_msgs) >= 2:
+#             last_bot_message = ai_msgs[-2].content
+#         if human_msgs:
+#             current_user_message = human_msgs[-1].content
+#         if ai_msgs:
+#             current_bot_message = ai_msgs[-1].content
+
+#         last_bot_message = last_bot_message or ""
+#         current_user_message = current_user_message or ""
+#         current_bot_message = current_bot_message or ""
+
+#         full_context = f"""Previous Bot: {last_bot_message}
+#     Current User: {current_user_message}
+#     Current Bot: {current_bot_message}"""
+
+#         print("INTENT CLASSIFIER CONTEXT >>>")
+#         print(full_context)
+
+#         intent_prompt = ChatPromptTemplate.from_messages([
+#             ("system", intent_system),
+#             ("human", "{context}")
+#         ])
+
+#         # BEFORE calling LLM: print context shape
+#         print("--- extract_details: calling intent LLM with context ---")
+#         llm_intent = await (intent_prompt | intent_extractor_llm_structured).ainvoke({
+#             "context": full_context
+#         })
+#         print("--- extract_details: intent LLM returned ---")
+#         print("RAW llm_intent (repr):", repr(llm_intent))
+#         # if it's a Pydantic model class `UserIntent`, convert and inspect
+#         if isinstance(llm_intent, UserIntent):
+#             user_intent = llm_intent
+#             print("Predicted user intent (UserIntent object):", _to_plain(user_intent))
+#         else:
+#             # try to coerce to plain
+#             try:
+#                 print("llm_intent is not UserIntent instance; trying to plain-encode it.")
+#                 print("llm_intent (jsonable):", _to_plain(llm_intent))
+#                 # If it contains the expected shape, convert to UserIntent-like dict
+#                 # but do not force an actual UserIntent object unless required.
+#                 user_intent = _to_plain(llm_intent)
+#             except Exception:
+#                 user_intent = None
+#                 print("Could not parse llm_intent into user_intent. Setting None.")
+
+#     except Exception as e:
+#         print(f"!!! ERROR during intent extraction: {e} !!!")
+#         traceback.print_exc()
+
+#     # Final debug print before returning node output
+#     print("--- Node: extract_details (EXIT) ---")
+#     print("final extracted_data (plain):", _to_plain(extracted_data))
+#     print("final user_intent (plain):", _to_plain(user_intent))
+
+#     return {
+#         "extracted_details": extracted_data,
+#         "user_intent": user_intent
+#     }
+
 async def extract_details(state: GraphState) -> Dict:
     """
-    Node to extract structured promotion details and user intent from the conversation so far.
-    Returns:
-      - extracted_details
-      - user_intent
-    This version prints user_intent at several stages for debugging.
+    Node to extract structured promotion details and user intent from the conversation.
+    Now with robust type error handling.
     """
     print("--- Node: extract_details (ENTER) ---")
     extracted_data: Optional[ExtractedPromotionDetails] = None
     user_intent: Optional[UserIntent] = None
 
-    # Build chat_history string (unchanged)
+    # Build chat_history string
     chat_history_lines: List[str] = []
     for msg in state.get("messages", []):
         if isinstance(msg, HumanMessage):
@@ -810,45 +1023,13 @@ async def extract_details(state: GraphState) -> Dict:
             if hasattr(msg, "content"):
                 chat_history_lines.append(f"Bot: {msg.content}")
     chat_history_str = "\n".join(chat_history_lines)
-
-    # build missing_fields (unchanged)
-    prev: Optional[ExtractedPromotionDetails] = state.get("extracted_details")
-    missing_fields: List[str] = []
-    if prev is None or not getattr(prev, "promotion_type", None):
-        missing_fields.append("Promotion Type")
-    if prev is None or not getattr(prev, "hierarchy_type", None):
-        missing_fields.append("Hierarchy Level Type")
-    if prev is None or not getattr(prev, "hierarchy_value", None):
-        missing_fields.append("Hierarchy Level Value")
-    if prev is None or not getattr(prev, "brand", None):
-        missing_fields.append("Brand")
-    if prev is None or not getattr(prev, "items", None):
-        missing_fields.append("Items")
-    if prev is None or not getattr(prev, "discount_type", None):
-        missing_fields.append("Discount Type")
-    if prev is None or not getattr(prev, "discount_value", None):
-        missing_fields.append("Discount Value")
-    if prev is None or not getattr(prev, "start_date", None):
-        missing_fields.append("Start Date")
-    if prev is None or not getattr(prev, "end_date", None):
-        missing_fields.append("End Date")
-    if prev is None or not getattr(prev, "stores", None):
-        missing_fields.append("Stores")
-    if prev is None or not getattr(prev, "email", None):
-        missing_fields.append("Email")
-
-    missing_fields_str = "\n".join(f"- {f}" for f in missing_fields) if missing_fields else "None"
-
-    # prepare prompt_filled (unchanged)
-    current_date = datetime.date.today().strftime("%d/%m/%Y")
     try:
-        prompt_filled = promotion_extraction_prompt \
-            .replace("{{extracted_text}}", chat_history_str) 
+        prompt_filled = promotion_extraction_prompt.replace("{{extracted_text}}", chat_history_str)
     except Exception as e:
-        print(f"Error formatting template_Promotion_without_date: {e}")
+        print(f"Error formatting template: {e}")
         prompt_filled = promotion_extraction_prompt
 
-    # 4. Invoke structured extractor LLM
+    # Extract promotion details
     try:
         detail_prompt = ChatPromptTemplate.from_messages([
             ("system", prompt_filled)
@@ -856,36 +1037,55 @@ async def extract_details(state: GraphState) -> Dict:
         print("--- extract_details: invoking extractor_llm_structured ---")
         llm_result = await (detail_prompt | extractor_llm_structured).ainvoke({})
         print("--- extract_details: extractor_llm_structured returned ---")
-        # Debug print raw llm_result
+        
         try:
             print("RAW llm_result (repr):", repr(llm_result))
         except Exception:
             print("RAW llm_result: <unprintable>")
 
+        # Handle the LLM result robustly
         if isinstance(llm_result, ExtractedPromotionDetails):
             extracted_data = llm_result
-            print("--- extract_details: extracted_data populated ---")
-            print("extracted_data (plain):", _to_plain(extracted_data))
+            print("--- extract_details: extracted_data populated (direct) ---")
+        elif isinstance(llm_result, dict):
+            # Try to parse the dict into our model
+            try:
+                extracted_data = ExtractedPromotionDetails.model_validate(llm_result)
+                print("--- extract_details: extracted_data populated (from dict) ---")
+            except Exception as parse_error:
+                print(f"!!! ERROR parsing dict to ExtractedPromotionDetails: {parse_error}")
+                # Try manual unwrapping as fallback
+                try:
+                    unwrapped = unwrap_nested_values(llm_result)
+                    extracted_data = ExtractedPromotionDetails.model_validate(unwrapped)
+                    print("--- extract_details: extracted_data populated (after unwrapping) ---")
+                except Exception as unwrap_error:
+                    print(f"!!! ERROR after unwrapping: {unwrap_error}")
+                    traceback.print_exc()
         else:
-            print("--- Warning: extract_details: LLM returned unexpected type:", type(llm_result))
-            # Attempt to salvage if the LLM returned a dict-like shape
+            print(f"--- Warning: LLM returned unexpected type: {type(llm_result)}")
             try:
                 extracted_data = _to_plain(llm_result)
                 print("extract_details: salvaged extracted_data:", extracted_data)
             except Exception:
                 pass
+        
+        if extracted_data:
+            print("extracted_data (plain):", _to_plain(extracted_data))
+            
     except Exception as e:
         print(f"!!! ERROR during promotion detail extraction: {e} !!!")
         traceback.print_exc()
 
-    # 5. Extract user intent (with verbose prints)
+    # Extract user intent
     try:
         print("--- extract_details: Starting intent extraction ---")
         last_bot_message = None
         current_user_message = None
         current_bot_message = None
 
-        relevant_msgs = [msg for msg in state.get("messages", []) if isinstance(msg, (HumanMessage, AIMessage))]
+        relevant_msgs = [msg for msg in state.get("messages", []) 
+                        if isinstance(msg, (HumanMessage, AIMessage))]
         human_msgs = [msg for msg in relevant_msgs if isinstance(msg, HumanMessage)]
         ai_msgs = [msg for msg in relevant_msgs if isinstance(msg, AIMessage)]
 
@@ -901,8 +1101,8 @@ async def extract_details(state: GraphState) -> Dict:
         current_bot_message = current_bot_message or ""
 
         full_context = f"""Previous Bot: {last_bot_message}
-    Current User: {current_user_message}
-    Current Bot: {current_bot_message}"""
+        Current User: {current_user_message}
+        Current Bot: {current_bot_message}"""
 
         print("INTENT CLASSIFIER CONTEXT >>>")
         print(full_context)
@@ -912,25 +1112,35 @@ async def extract_details(state: GraphState) -> Dict:
             ("human", "{context}")
         ])
 
-        # BEFORE calling LLM: print context shape
         print("--- extract_details: calling intent LLM with context ---")
         llm_intent = await (intent_prompt | intent_extractor_llm_structured).ainvoke({
             "context": full_context
         })
         print("--- extract_details: intent LLM returned ---")
         print("RAW llm_intent (repr):", repr(llm_intent))
-        # if it's a Pydantic model class `UserIntent`, convert and inspect
+        
+        # Handle intent result
         if isinstance(llm_intent, UserIntent):
             user_intent = llm_intent
             print("Predicted user intent (UserIntent object):", _to_plain(user_intent))
+        elif isinstance(llm_intent, dict):
+            try:
+                user_intent = UserIntent.model_validate(llm_intent)
+                print("Predicted user intent (from dict):", _to_plain(user_intent))
+            except Exception as intent_error:
+                print(f"Could not parse intent dict: {intent_error}")
+                # Try unwrapping
+                try:
+                    unwrapped_intent = unwrap_nested_values(llm_intent)
+                    user_intent = UserIntent.model_validate(unwrapped_intent)
+                    print("Predicted user intent (after unwrapping):", _to_plain(user_intent))
+                except Exception:
+                    user_intent = _to_plain(llm_intent)
         else:
-            # try to coerce to plain
             try:
                 print("llm_intent is not UserIntent instance; trying to plain-encode it.")
-                print("llm_intent (jsonable):", _to_plain(llm_intent))
-                # If it contains the expected shape, convert to UserIntent-like dict
-                # but do not force an actual UserIntent object unless required.
                 user_intent = _to_plain(llm_intent)
+                print("llm_intent (jsonable):", user_intent)
             except Exception:
                 user_intent = None
                 print("Could not parse llm_intent into user_intent. Setting None.")
@@ -939,13 +1149,15 @@ async def extract_details(state: GraphState) -> Dict:
         print(f"!!! ERROR during intent extraction: {e} !!!")
         traceback.print_exc()
 
-    # Final debug print before returning node output
+    # Final output
     print("--- Node: extract_details (EXIT) ---")
     print("final extracted_data (plain):", _to_plain(extracted_data))
     print("final user_intent (plain):", _to_plain(user_intent))
-
+    plain_extracted = _to_plain(extracted_data)
+    unwrapped_extracted_data=_to_plain(unwrap_nested_values(plain_extracted))
+    print("final extracted_data unwrapped:", unwrapped_extracted_data)
     return {
-        "extracted_details": extracted_data,
+        "extracted_details": unwrapped_extracted_data,
         "user_intent": user_intent
     }
 
@@ -1022,200 +1234,200 @@ memory = MemorySaver()
 app_runnable_promotion_agentic = workflow.compile(checkpointer=memory)
 
 # Connection manager to handle multiple WebSocket connections
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
+# class ConnectionManager:
+#     def __init__(self):
+#         self.active_connections: Dict[str, WebSocket] = {}
 
-    async def connect(self, websocket: WebSocket, thread_id: str):
-        await websocket.accept()
-        self.active_connections[thread_id] = websocket
-        print(f"WebSocket connected for thread: {thread_id}")
+#     async def connect(self, websocket: WebSocket, thread_id: str):
+#         await websocket.accept()
+#         self.active_connections[thread_id] = websocket
+#         print(f"WebSocket connected for thread: {thread_id}")
 
-    def disconnect(self, thread_id: str):
-        if thread_id in self.active_connections:
-            del self.active_connections[thread_id]
-            print(f"WebSocket disconnected for thread: {thread_id}")
+#     def disconnect(self, thread_id: str):
+#         if thread_id in self.active_connections:
+#             del self.active_connections[thread_id]
+#             print(f"WebSocket disconnected for thread: {thread_id}")
 
-    async def send_message(self, message: dict, thread_id: str):
-        if thread_id in self.active_connections:
-            await self.active_connections[thread_id].send_json(message)
+#     async def send_message(self, message: dict, thread_id: str):
+#         if thread_id in self.active_connections:
+#             await self.active_connections[thread_id].send_json(message)
 
-    async def send_text(self, text: str, thread_id: str):
-        if thread_id in self.active_connections:
-            await self.active_connections[thread_id].send_text(text)
+#     async def send_text(self, text: str, thread_id: str):
+#         if thread_id in self.active_connections:
+#             await self.active_connections[thread_id].send_text(text)
 
-manager = ConnectionManager()
+# manager = ConnectionManager()
 
-# Modified stream generator for WebSocket
-async def stream_response_generator_websocket(
-    graph_stream: AsyncIterator[Dict],
-    websocket: WebSocket,
-    thread_id: str
-) -> None:
-    """
-    Streams LLM response chunks to WebSocket client with structured events.
-    """
-    print(f"--- WEBSOCKET STREAM GENERATOR STARTED for thread: {thread_id} ---")
-    full_response_for_log = ""
+# # Modified stream generator for WebSocket
+# async def stream_response_generator_websocket(
+#     graph_stream: AsyncIterator[Dict],
+#     websocket: WebSocket,
+#     thread_id: str
+# ) -> None:
+#     """
+#     Streams LLM response chunks to WebSocket client with structured events.
+#     """
+#     print(f"--- WEBSOCKET STREAM GENERATOR STARTED for thread: {thread_id} ---")
+#     full_response_for_log = ""
     
-    try:
-        async for event in graph_stream:
-            # Stream text chunks
-            if event["event"] == "on_chat_model_stream":
-                metadata = event.get("metadata", {})
-                node_name = metadata.get("langgraph_node")
+#     try:
+#         async for event in graph_stream:
+#             # Stream text chunks
+#             if event["event"] == "on_chat_model_stream":
+#                 metadata = event.get("metadata", {})
+#                 node_name = metadata.get("langgraph_node")
                 
-                if node_name in {"generate_direct_response", "generate_response_from_sql"}:
-                    chunk = event["data"].get("chunk")
-                    if isinstance(chunk, AIMessageChunk) and chunk.content:
-                        content = chunk.content
-                        full_response_for_log += content
+#                 if node_name in {"generate_direct_response", "generate_response_from_sql"}:
+#                     chunk = event["data"].get("chunk")
+#                     if isinstance(chunk, AIMessageChunk) and chunk.content:
+#                         content = chunk.content
+#                         full_response_for_log += content
                         
-                        # Send as structured message
-                        await manager.send_message({
-                            "type": "stream_chunk",
-                            "content": content,
-                            "node": node_name
-                        }, thread_id)
+#                         # Send as structured message
+#                         await manager.send_message({
+#                             "type": "stream_chunk",
+#                             "content": content,
+#                             "node": node_name
+#                         }, thread_id)
             
-            # Send extracted details when available
-            elif event["event"] == "on_node_end" and event.get("name") == "extract_details":
-                output = event["data"].get("output", {})
+#             # Send extracted details when available
+#             elif event["event"] == "on_node_end" and event.get("name") == "extract_details":
+#                 output = event["data"].get("output", {})
                 
-                # Safely serialize extracted details
-                extracted_details = output.get("extracted_details")
-                user_intent = output.get("user_intent")
+#                 # Safely serialize extracted details
+#                 extracted_details = output.get("extracted_details")
+#                 user_intent = output.get("user_intent")
                 
-                payload = {
-                    "type": "extracted_details",
-                    "extracted_details": _to_plain(extracted_details) if extracted_details else None,
-                    "user_intent": _to_plain(user_intent) if user_intent else None,
-                }
+#                 payload = {
+#                     "type": "extracted_details",
+#                     "extracted_details": _to_plain(extracted_details) if extracted_details else None,
+#                     "user_intent": _to_plain(user_intent) if user_intent else None,
+#                 }
                 
-                await manager.send_message(payload, thread_id)
-                print(f"Sent extracted details: {payload}")
+#                 await manager.send_message(payload, thread_id)
+#                 print(f"Sent extracted details: {payload}")
         
-        # Send completion signal
-        await manager.send_message({
-            "type": "stream_complete",
-            "full_response": full_response_for_log
-        }, thread_id)
+#         # Send completion signal
+#         await manager.send_message({
+#             "type": "stream_complete",
+#             "full_response": full_response_for_log
+#         }, thread_id)
         
-    except Exception as e:
-        print(f"!!! ERROR in websocket stream generator: {e} !!!")
-        traceback.print_exc()
+#     except Exception as e:
+#         print(f"!!! ERROR in websocket stream generator: {e} !!!")
+#         traceback.print_exc()
         
-        await manager.send_message({
-            "type": "error",
-            "message": str(e)
-        }, thread_id)
+#         await manager.send_message({
+#             "type": "error",
+#             "message": str(e)
+#         }, thread_id)
     
-    finally:
-        print(f"--- WEBSOCKET STREAM GENERATOR FINISHED for thread: {thread_id} ---")
+#     finally:
+#         print(f"--- WEBSOCKET STREAM GENERATOR FINISHED for thread: {thread_id} ---")
 
 app = FastAPI(
     title="LangGraph Chatbot API",
     description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
 )
-# WebSocket endpoint (replace your POST endpoint)
-@app.websocket("/ws/promotion_chat/{thread_id}")
-async def websocket_promotion_chat(websocket: WebSocket, thread_id: str):
-    """
-    WebSocket endpoint for promotion chat with agentic capabilities.
+# # WebSocket endpoint (replace your POST endpoint)
+# @app.websocket("/ws/promotion_chat/{thread_id}")
+# async def websocket_promotion_chat(websocket: WebSocket, thread_id: str):
+#     """
+#     WebSocket endpoint for promotion chat with agentic capabilities.
     
-    Expected message format from client:
-    {
-        "type": "message",
-        "content": "user message text",
-        "thread_id": "optional-override"
-    }
+#     Expected message format from client:
+#     {
+#         "type": "message",
+#         "content": "user message text",
+#         "thread_id": "optional-override"
+#     }
     
-    Response format:
-    {
-        "type": "stream_chunk" | "extracted_details" | "stream_complete" | "error",
-        "content": "...",  // for stream_chunk
-        "extracted_details": {...},  // for extracted_details
-        "user_intent": {...},  // for extracted_details
-        "message": "..."  // for error
-    }
-    """
-    await manager.connect(websocket, thread_id)
-    config = {"configurable": {"thread_id": thread_id}}
+#     Response format:
+#     {
+#         "type": "stream_chunk" | "extracted_details" | "stream_complete" | "error",
+#         "content": "...",  // for stream_chunk
+#         "extracted_details": {...},  // for extracted_details
+#         "user_intent": {...},  // for extracted_details
+#         "message": "..."  // for error
+#     }
+#     """
+#     await manager.connect(websocket, thread_id)
+#     config = {"configurable": {"thread_id": thread_id}}
     
-    try:
-        while True:
-            # Receive message from client
-            data = await websocket.receive_json()
-            print(f"\n--- [Thread: {thread_id}] Received WebSocket message: {data} ---")
+#     try:
+#         while True:
+#             # Receive message from client
+#             data = await websocket.receive_json()
+#             print(f"\n--- [Thread: {thread_id}] Received WebSocket message: {data} ---")
             
-            message_type = data.get("type")
+#             message_type = data.get("type")
             
-            if message_type == "message":
-                user_message = data.get("content", "")
+#             if message_type == "message":
+#                 user_message = data.get("content", "")
                 
-                if not user_message.strip():
-                    await manager.send_message({
-                        "type": "error",
-                        "message": "Empty message received"
-                    }, thread_id)
-                    continue
+#                 if not user_message.strip():
+#                     await manager.send_message({
+#                         "type": "error",
+#                         "message": "Empty message received"
+#                     }, thread_id)
+#                     continue
                 
-                # Send acknowledgment
-                await manager.send_message({
-                    "type": "ack",
-                    "message": "Processing your request..."
-                }, thread_id)
+#                 # Send acknowledgment
+#                 await manager.send_message({
+#                     "type": "ack",
+#                     "message": "Processing your request..."
+#                 }, thread_id)
                 
-                # Prepare input for graph
-                input_message = HumanMessage(content=user_message)
-                input_state = {"messages": [input_message]}
+#                 # Prepare input for graph
+#                 input_message = HumanMessage(content=user_message)
+#                 input_state = {"messages": [input_message]}
                 
-                try:
-                    # Stream graph execution
-                    graph_stream = app_runnable_promotion_agentic.astream_events(
-                        input_state, 
-                        config,
-                        version="v1"
-                    )
+#                 try:
+#                     # Stream graph execution
+#                     graph_stream = app_runnable_promotion_agentic.astream_events(
+#                         input_state, 
+#                         config,
+#                         version="v1"
+#                     )
                     
-                    # Process and stream results
-                    await stream_response_generator_websocket(
-                        graph_stream,
-                        websocket,
-                        thread_id
-                    )
+#                     # Process and stream results
+#                     await stream_response_generator_websocket(
+#                         graph_stream,
+#                         websocket,
+#                         thread_id
+#                     )
                     
-                except Exception as graph_error:
-                    print(f"!!! ERROR in graph execution: {graph_error} !!!")
-                    traceback.print_exc()
+#                 except Exception as graph_error:
+#                     print(f"!!! ERROR in graph execution: {graph_error} !!!")
+#                     traceback.print_exc()
                     
-                    await manager.send_message({
-                        "type": "error",
-                        "message": f"Error processing request: {str(graph_error)}"
-                    }, thread_id)
+#                     await manager.send_message({
+#                         "type": "error",
+#                         "message": f"Error processing request: {str(graph_error)}"
+#                     }, thread_id)
             
-            elif message_type == "ping":
-                # Heartbeat mechanism
-                await manager.send_message({
-                    "type": "pong"
-                }, thread_id)
+#             elif message_type == "ping":
+#                 # Heartbeat mechanism
+#                 await manager.send_message({
+#                     "type": "pong"
+#                 }, thread_id)
             
-            else:
-                await manager.send_message({
-                    "type": "error",
-                    "message": f"Unknown message type: {message_type}"
-                }, thread_id)
+#             else:
+#                 await manager.send_message({
+#                     "type": "error",
+#                     "message": f"Unknown message type: {message_type}"
+#                 }, thread_id)
     
-    except WebSocketDisconnect:
-        manager.disconnect(thread_id)
-        print(f"Client disconnected: {thread_id}")
+#     except WebSocketDisconnect:
+#         manager.disconnect(thread_id)
+#         print(f"Client disconnected: {thread_id}")
     
-    except Exception as e:
-        print(f"!!! WebSocket error for thread {thread_id}: {e} !!!")
-        traceback.print_exc()
-        manager.disconnect(thread_id)
+#     except Exception as e:
+#         print(f"!!! WebSocket error for thread {thread_id}: {e} !!!")
+#         traceback.print_exc()
+#         manager.disconnect(thread_id)
 
-# --- FastAPI Application ---
+# # --- FastAPI Application ---
 
 origins = [
     "http://localhost:3000", # Allow your frontend origin
