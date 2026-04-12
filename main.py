@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 import models
 from typing import List,Any,Optional
 from fastapi.middleware.cors import CORSMiddleware
-from utils_extractor import run_conversation
 from typing import Dict,Tuple, Optional
 import easyocr
 import pdfplumber

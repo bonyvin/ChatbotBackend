@@ -364,7 +364,7 @@ async def preprocess_input(state: GraphState) -> Dict:
     return {"user_query": user_query}
 
 #sql ignored for now
-async def generate_sql(state: GraphState) -> Dict:
+async def generate_sql_old(state: GraphState) -> Dict:
     """
     Node to attempt generating SQL from the user query.
     Uses the dedicated sql_generator_llm.
@@ -429,6 +429,78 @@ SQL: SELECT im.itemId FROM itemmaster im WHERE im.itemDepartment LIKE 'T-Shirt%'
 Example 5: Complex request with irrelevant info
 User Query: "Create a simple promotion offering 30% off all yellow items from the FashionX Brand in the T-Shirt Department, valid from 17/04/2025 until the end of May 2025."
 SQL: SELECT DISTINCT im.itemId FROM itemmaster im WHERE im.brand = 'FashionX' AND im.itemDepartment LIKE 'T-Shirt%' AND (EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType1 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType2 AND idf.diffId = 'Yellow') OR EXISTS (SELECT 1 FROM itemdiffs idf WHERE idf.id = im.diffType3 AND idf.diffId = 'Yellow'))
+"""),
+        ("human", "Convert this question to a SQL SELECT query:\n\n```text\n{user_query}\n```")
+    ])
+
+    # Create the generation chain (Prompt -> LLM -> String Output)
+    sql_generation_chain = sql_generation_prompt | sql_generator_llm | StrOutputParser()
+
+    generated_sql = None # Default to None
+    try:
+        # Limit input text length (optional)
+        max_len = 2000
+        truncated_query = user_query[:max_len] + ("..." if len(user_query) > max_len else "")
+
+        print(f"--- Generating SQL for: '{truncated_query}' ---")
+        llm_output = await sql_generation_chain.ainvoke({"user_query": truncated_query})
+
+        # Basic validation and cleaning
+        cleaned_sql = llm_output.strip().strip(';').strip()
+
+        # *** START FIX: Add missing closing parenthesis for EXISTS groups ***
+        # Check if the query uses the specific pattern ' AND (EXISTS ...' and lacks the closing parenthesis
+        # Use case-insensitive check for robustness
+        pattern_start_exists = " AND (EXISTS ("
+        if pattern_start_exists.lower() in cleaned_sql.lower() and not cleaned_sql.endswith(")"):
+             # Check if the number of opening parentheses is one more than closing ones
+             # This is a slightly more robust check than just checking the end
+             if cleaned_sql.count("(") == cleaned_sql.count(")") + 1:
+                 print("--- Post-processing: Adding missing closing parenthesis for EXISTS group. ---")
+                 cleaned_sql += ")"
+        # *** END FIX ***
+
+        if not cleaned_sql:
+            print("--- Generation failed: LLM returned empty string. ---")
+        elif "cannot be answered" in cleaned_sql.lower():
+            print(f"--- LLM indicated query cannot be answered: {cleaned_sql} ---")
+        elif cleaned_sql.lower().startswith("select"):
+            # Further check for potentially harmful keywords (basic protection)
+            harmful_keywords = ['update ', 'insert ', 'delete ', 'drop ', 'alter ', 'truncate ']
+            if any(keyword in cleaned_sql.lower() for keyword in harmful_keywords):
+                print(f"--- Generation failed: Potentially harmful non-SELECT keyword detected: {cleaned_sql} ---")
+            else:
+                print(f"--- SQL Generation Successful (after potential fix): {cleaned_sql} ---")
+                generated_sql = cleaned_sql # Assign the potentially fixed SQL
+        else:
+            print(f"--- Generation failed: Output does not start with SELECT: {cleaned_sql} ---")
+
+    except Exception as e:
+        print(f"!!! ERROR during SQL generation: {e} !!!")
+        traceback.print_exc()
+        # Keep generated_sql as None
+
+    return {"generated_sql": generated_sql}
+async def generate_sql(state: GraphState) -> Dict:
+    """
+    Node to attempt generating SQL from the user query.
+    Uses the dedicated sql_generator_llm.
+    Includes post-processing to fix missing closing parenthesis.
+    """
+    print("--- Node: generate_sql ---")
+    user_query = state.get("user_query")
+    if not user_query:
+        print("--- No user query found. Skipping SQL generation. ---")
+        return {"generated_sql": None}
+
+    # Updated prompt for SQL generation
+    # Added emphasis on balanced parentheses in rule 7
+    sql_generation_prompt = ChatPromptTemplate.from_messages([
+        ("system", f"""You are an expert SQL generator. Return ONLY a raw SQL SELECT statement.
+DO NOT include markdown, code fences, or explanations. Your task is to convert the user's natural language question into a valid SQL SELECT statement based ONLY on the database schema and rules provided below.
+
+Database Schema:
+{TABLE_SCHEMA}
 """),
         ("human", "Convert this question to a SQL SELECT query:\n\n```text\n{user_query}\n```")
     ])
