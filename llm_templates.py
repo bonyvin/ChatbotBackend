@@ -629,15 +629,96 @@ If you respond with 'Yes', I'll confirm with *"Purchase Order created successful
 Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
 If you respond with an email id, I'll confirm with "Email sent successfully to [received email id].".
 """
-
 po_database_schema="""
+The user wants to query the MySQL database. Generate a **pure SQL query** without explanations, comments, or descriptions.
+
+  I have 5 tables in my database, namely: podetails, poheader, suppliers, shipmentHeader, and shipmentDetails.
+
+  - **podetails**: id, itemId, itemQuantity, supplierId, itemDescription, itemCost, totalItemCost, poId.
+  - **poheader**: poNumber, shipByDate, leadTime, estimatedDeliveryDate, totalQuantity, totalCost, totalTax, currency, payment_term.
+  - **suppliers**: supplierId, name, supplier_email, phone, address, lead_time.
+  - **shipmentheader**: receiptId, asnId, expectedDate, receivedDate, receivedBy, status, sourceLocation, destinationLocation, totalQuantity, totalCost, poId.
+  - **shipmentdetails**: id, itemId, itemDescription, itemCost, expectedItemQuantity, receivedItemQuantity, damagedItemQuantity, containerId, receiptId, invoiced.
+
+  ### **Field Mapping Rules**
+  - "purchase order", "purchaseorder", "PURCHASE ORDER", "PURCHASEORDER", "Purchase Order", and "PurchaseOrder" refer to the **poheader** table.
+  - "PO number", "po_number", "po no", "PONumber", "order number" refer to **poNumber**.
+  - "po_id" and "poId" are equivalent and refer to **poId**.
+  - "cost" and "total cost" refer to **totalCost**.
+  - "payment terms" and "payment_term" are the same.
+  - "lead time" and "lead_time" are the same.
+  - "supplier" refers to the **suppliers** table.
+  - "supplierId" and "supplier id" refer to **supplierId**.
+  - "shipment", "shipment header", "receipt" refer to **shipmentHeader**.
+  - "shipment details", "shipment detail", "shipment items" refer to **shipmentDetails**.
+  - "receipt id" and "receiptId" refer to **receiptId** in **shipmentHeader** or **shipmentDetails**.
+  - "ASN" refers to **asnId**.
+  - "expected date" refers to **expectedDate**.
+  - "received date" refers to **receivedDate**.
+  - "received by" refers to **receivedBy**.
+  - "status" refers to **status**.
+  - "source location" refers to **sourceLocation**.
+  - "destination location" refers to **destinationLocation**.
+  - "total quantity" refers to **totalQuantity**.
+  - "total cost" refers to **totalCost**.
+  - "item id" refers to **itemId**.
+  - "item description" refers to **itemDescription**.
+  - "item cost" refers to **itemCost**.
+  - "expected item quantity" refers to **expectedItemQuantity**.
+  - "received item quantity" refers to **receivedItemQuantity**.
+  - "damaged item quantity" refers to **damagedItemQuantity**.
+  - "container id" refers to **containerId**.
+  - "invoiced" refers to **invoiced**.
+  - "quality" and "quality issues" refer to the **percentage of damagedItemQuantity** calculated as:
+    **(damagedItemQuantity / receivedItemQuantity) * 100**.
+    ### **Supplier Performance Scenarios**
+    Use the following query patterns when the user asks about supplier performance. Replace 'supplierId' with the actual supplier ID extracted from the user's message.
+
+    **1. Has this supplier fulfilled all orders?**
+    Trigger phrases: "fulfilled all orders", "completed all orders", "has this supplier fulfilled", "are all orders complete", "did this supplier complete all shipments", or similar.
+    Generate:
+    SELECT sh.status FROM shipmentheader sh JOIN podetails pd ON sh.poId = pd.poId WHERE pd.supplierId = 'supplierId';
+    Interpret the results as follows: if all rows have a status of 'delivered' or 'completed', the supplier has fulfilled all orders. If any row has a different status such as 'pending' or 'in transit', the supplier has not fulfilled all orders.
+
+    **2. Has this supplier delivered on time?**
+    Trigger phrases: "delivered on time", "late deliveries", "on time delivery", "has this supplier delivered on time", "did this supplier deliver late", or similar.
+    Generate:
+    SELECT sh.expectedDate, sh.receivedDate, (sh.receivedDate > sh.expectedDate) AS is_delayed FROM shipmentheader sh JOIN podetails pd ON sh.poId = pd.poId WHERE pd.supplierId = 'supplierId';
+    Interpret the results as follows: a row where is_delayed = 1 means that shipment was delivered late. If all rows return is_delayed = 0, the supplier has always delivered on time. If any row returns is_delayed = 1, the supplier has had late deliveries.
+
+    **3. Does this supplier have quality issues?**
+    Trigger phrases: "quality issues", "damaged goods", "defect rate", "does this supplier have quality issues", "are there quality problems with this supplier", or similar.
+    Generate:
+    SELECT sd.receivedItemQuantity, sd.damagedItemQuantity, CASE WHEN sd.receivedItemQuantity = 0 THEN 0 ELSE (sd.damagedItemQuantity / sd.receivedItemQuantity) * 100 END AS damage_percentage FROM shipmentdetails sd JOIN shipmentheader sh ON sd.receiptId = sh.receiptId WHERE EXISTS (SELECT 1 FROM podetails pd WHERE pd.poId = sh.poId AND pd.supplierId = 'supplierId');
+    Interpret the results as follows: if all rows return a damage_percentage of 0, the supplier has no quality issues. If any row returns a damage_percentage greater than 0, the supplier has quality issues. A higher damage_percentage indicates more severe quality problems.
+
+    ### **When NOT to Generate SQL**
+    If the user's message is a general conversational message, a confirmation, a greeting, or does not require data retrieval, respond with exactly the string: NO_SQL_NEEDED
+    Do NOT generate SQL for messages such as:
+    - Confirmations or agreements: "Yes", "No", "Sure", "Ok", "Please submit", "Yes please submit", "Confirm", "Go ahead", "That's correct"
+    - Greetings or small talk: "Hello", "Hi", "Thanks", "Thank you", "Goodbye"
+    - Instructions to act on already-provided data: "Submit the details", "Create the PO", "Send the email", "Save this"
+    - Questions about the chatbot itself: "What can you do?", "Help"
+    
+    IMPORTANT: Always generate SQL (do NOT return NO_SQL_NEEDED) if the message asks about:
+    - Supplier performance, fulfillment, delivery, or quality — even if phrased as "this supplier" without an explicit ID.
+    - Shipment status, delays, or damage.
+    - Any question that matches the Supplier Performance Scenarios above.
+    
+    If in doubt and the message does not reference a specific database entity AND does not match any Supplier Performance Scenario, return NO_SQL_NEEDED.
+
+    ### **Case-Insensitive Handling**
+    ### **Handling Special Characters & Spaces**
+"""
+
+po_database_schema_old="""
 The user wants to query the MySQL database.Generate a **pure SQL query** without explanations, comments, or descriptions.
     I have 7 tables in my database, namely: invoicedetails, invoiceheader, podetails, poheader, suppliers, shipmentHeader, and shipmentDetails.
     - **invoicedetails**: id, itemId, itemQuantity, itemDescription, itemCost, totalItemCost, poId, invoiceNumber.
     - **invoiceheader**: invoiceId, invoicedate, invoiceType, currency, payment_term, invoice_status, total_qty, total_cost, total_tax, total_amount, userInvNo.
     - **podetails**: id, itemId, itemQuantity, supplierId, itemDescription, itemCost, totalItemCost, poId.
     - **poheader**: poNumber, shipByDate, leadTime, estimatedDeliveryDate, totalQuantity, totalCost, totalTax, currency, payment_term.
-    - **suppliers**: supplierId, name, email, phone, address, lead_time.
+    - **suppliers**: supplierId, name, supplier_email, phone, address, lead_time.
     - **shipmentheader**: receiptId, asnId, expectedDate, receivedDate, receivedBy, status, sourceLocation, destinationLocation, totalQuantity, totalCost, poId.
     - **shipmentdetails**: id, itemId, itemDescription, itemCost, expectedItemQuantity, receivedItemQuantity, damagedItemQuantity, containerId, receiptId, invoiced.
 

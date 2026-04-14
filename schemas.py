@@ -84,7 +84,7 @@ class ShipmentDetails(BaseModel):
 class SupplierCreate(BaseModel):
     supplierId: str 
     name: str
-    email: str
+    supplier_email: str
     phone: str
     address: str
     lead_time:str

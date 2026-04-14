@@ -177,7 +177,7 @@ async def send_file_new(
         return JSONResponse(status_code=400, content={"message": "Invalid JSON in 'body' field."})
 
     message = MessageSchema(
-        subject="Fastapi-Mail module",
+        subject="Document",
         recipients=[email],
         template_body=body_dict,
         subtype=MessageType.html,
@@ -412,14 +412,14 @@ def get_shipment_with_details(receipt_id: str, db: Session = Depends(get_db)):
 @app.post("/suppliers/", response_model=SupplierCreate)
 def create_supplier(supplier: SupplierCreate, db: Session = Depends(get_db)):
     # Check if supplier already exists
-    existing_supplier = db.query(Supplier).filter(Supplier.email == supplier.email).first()
+    existing_supplier = db.query(Supplier).filter(Supplier.supplier_email == supplier.supplier_email).first()
     if existing_supplier:
         raise HTTPException(status_code=400, detail="Supplier with this email already exists")
 
     new_supplier = Supplier(
         supplierId=supplier.supplierId,
         name=supplier.name,
-        email=supplier.email,
+        email=supplier.supplier_email,
         phone=supplier.phone,
         address=supplier.address,
         lead_time=supplier.lead_time

@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 import os
 import uuid
 import json
@@ -495,12 +496,36 @@ async def generate_sql(state: GraphState) -> Dict:
 
     # Updated prompt for SQL generation
     # Added emphasis on balanced parentheses in rule 7
+#     sql_generation_prompt = ChatPromptTemplate.from_messages([
+#         ("system", f"""You are an expert SQL generator. Return ONLY a raw SQL SELECT statement.
+# DO NOT include markdown, code fences, or explanations. Your task is to convert the user's natural language question into a valid SQL SELECT statement based ONLY on the database schema and rules provided below.
+# {state.get(extract_details)}
+# Database Schema:
+# {TABLE_SCHEMA}
+# """),
+    # Extract supplier_id from graph state and substitute into schema
+    extracted_details = state.get("extracted_details")
+    supplier_id = None
+    if extracted_details:
+        if isinstance(extracted_details, dict):
+            supplier_id = extracted_details.get("supplier_id")
+        elif hasattr(extracted_details, "supplier_id"):
+            supplier_id = extracted_details.supplier_id
+
+    schema_with_supplier = po_database_schema
+    if supplier_id:
+        schema_with_supplier = po_database_schema.replace("'supplierId'", f"'{supplier_id}'")
+        print(f"--- Substituted supplier_id in schema: {supplier_id} ---")
+    else:
+        print("--- No supplier_id found in extracted_details, leaving placeholder as-is ---")
+
     sql_generation_prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""You are an expert SQL generator. Return ONLY a raw SQL SELECT statement.
-DO NOT include markdown, code fences, or explanations. Your task is to convert the user's natural language question into a valid SQL SELECT statement based ONLY on the database schema and rules provided below.
+        ("system", f"""You are an expert SQL generator. Return ONLY a raw SQL SELECT statement. DO NOT include markdown, code fences, or explanations.Your task is to convert the user's natural language question into a valid SQL SELECT statement based ONLY on the database schema and rules provided below.
 
 Database Schema:
-{TABLE_SCHEMA}
+{schema_with_supplier}
+
+# ... rest of your existing prompt rules and examples unchanged ...
 """),
         ("human", "Convert this question to a SQL SELECT query:\n\n```text\n{user_query}\n```")
     ])
@@ -519,7 +544,9 @@ Database Schema:
 
         # Basic validation and cleaning
         cleaned_sql = llm_output.strip().strip(';').strip()
-
+        if cleaned_sql.upper() == "NO_SQL_NEEDED":
+            print("--- LLM indicated no SQL needed for this query. ---")
+            return {"generated_sql": None}
         # *** START FIX: Add missing closing parenthesis for EXISTS groups ***
         # Check if the query uses the specific pattern ' AND (EXISTS ...' and lacks the closing parenthesis
         # Use case-insensitive check for robustness
@@ -624,7 +651,12 @@ async def execute_sql(state: GraphState) -> Dict:
         sql_results = error_msg # Return the error message string
 
     return {"sql_results": sql_results}
-
+def serialize_row_value(val):
+    if isinstance(val, Decimal):
+        return float(val)
+    if isinstance(val, (datetime.date, datetime.datetime)):
+        return val.isoformat()
+    return val
 async def generate_response_from_sql(state: 'GraphState') -> Dict:
     """
     Node to generate a natural language response based on SQL execution results.
@@ -659,9 +691,9 @@ async def generate_response_from_sql(state: 'GraphState') -> Dict:
             for row in sql_results[:max_results_to_show]:
                  try:
                      # Attempt to convert row to dict if needed (adjust based on actual row type)
-                     serializable_row = dict(row) if not isinstance(row, dict) else row
-                     # Further check/convert types within the row if necessary
-                     serializable_results.append(serializable_row)
+                    raw_row = dict(row) if not isinstance(row, dict) else row
+                    serializable_row = {k: serialize_row_value(v) for k, v in raw_row.items()}
+                    serializable_results.append(serializable_row)                    
                  except TypeError:
                      print(f"Warning: Could not serialize row for LLM context: {row}")
                      serializable_results.append({"error": "Could not display row data"})
@@ -805,141 +837,6 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
 
 
 intent_system=purchase_order_intent_system
-# Replace your existing extract_details with this version
-# async def extract_details(state: GraphState) -> Dict:
-#     """
-#     Node to extract structured purchase order details and user intent from the conversation so far.
-#     Returns:
-#       - extracted_details
-#       - user_intent
-#     This version prints user_intent at several stages for debugging.
-#     """
-#     print("--- Node: extract_details (ENTER) ---")
-#     extracted_data: Optional[ExtractedPurchaseOrderDetails] = None
-#     user_intent: Optional[UserIntent] = None
-
-#     # Build chat_history string (unchanged)
-#     chat_history_lines: List[str] = []
-#     for msg in state.get("messages", []):
-#         if isinstance(msg, HumanMessage):
-#             chat_history_lines.append(f"User: {msg.content}")
-#         elif isinstance(msg, AIMessage):
-#             chat_history_lines.append(f"Bot: {msg.content}")
-#         else:
-#             if hasattr(msg, "content"):
-#                 chat_history_lines.append(f"Bot: {msg.content}")
-#     chat_history_str = "\n".join(chat_history_lines)
-
-#     # build missing_fields (unchanged)
-#     prev: Optional[ExtractedPurchaseOrderDetails] = state.get("extracted_details")
-
-#     try:
-#         prompt_filled = po_extraction_prompt \
-#             .replace("{{extracted_text}}", chat_history_str) 
-#     except Exception as e:
-#         print(f"Error formatting template_Po_without_date: {e}")
-#         prompt_filled = po_extraction_prompt
-
-#     # 4. Invoke structured extractor LLM
-#     try:
-#         detail_prompt = ChatPromptTemplate.from_messages([
-#             ("system", prompt_filled)
-#         ])
-#         print("--- extract_details: invoking extractor_llm_structured ---")
-#         llm_result = await (detail_prompt | extractor_llm_structured).ainvoke({})
-#         print("--- extract_details: extractor_llm_structured returned ---")
-#         # Debug print raw llm_result
-#         try:
-#             print("RAW llm_result (repr):", repr(llm_result))
-#         except Exception:
-#             print("RAW llm_result: <unprintable>")
-
-#         if isinstance(llm_result, ExtractedPurchaseOrderDetails):
-#             extracted_data = llm_result
-#             print("--- extract_details: extracted_data populated ---")
-#             print("extracted_data (plain):", _to_plain(extracted_data))
-#         else:
-#             print("--- Warning: extract_details: LLM returned unexpected type:", type(llm_result))
-#             # Attempt to salvage if the LLM returned a dict-like shape
-#             try:
-#                 extracted_data = _to_plain(llm_result)
-#                 print("extract_details: salvaged extracted_data:", extracted_data)
-#             except Exception:
-#                 pass
-#     except Exception as e:
-#         print(f"!!! ERROR during promotion detail extraction: {e} !!!")
-#         traceback.print_exc()
-
-#     # 5. Extract user intent (with verbose prints)
-#     try:
-#         print("--- extract_details: Starting intent extraction ---")
-#         last_bot_message = None
-#         current_user_message = None
-#         current_bot_message = None
-
-#         relevant_msgs = [msg for msg in state.get("messages", []) if isinstance(msg, (HumanMessage, AIMessage))]
-#         human_msgs = [msg for msg in relevant_msgs if isinstance(msg, HumanMessage)]
-#         ai_msgs = [msg for msg in relevant_msgs if isinstance(msg, AIMessage)]
-
-#         if len(ai_msgs) >= 2:
-#             last_bot_message = ai_msgs[-2].content
-#         if human_msgs:
-#             current_user_message = human_msgs[-1].content
-#         if ai_msgs:
-#             current_bot_message = ai_msgs[-1].content
-
-#         last_bot_message = last_bot_message or ""
-#         current_user_message = current_user_message or ""
-#         current_bot_message = current_bot_message or ""
-
-#         full_context = f"""Previous Bot: {last_bot_message}
-#     Current User: {current_user_message}
-#     Current Bot: {current_bot_message}"""
-
-#         print("INTENT CLASSIFIER CONTEXT >>>")
-#         print(full_context)
-
-#         intent_prompt = ChatPromptTemplate.from_messages([
-#             ("system", intent_system),
-#             ("human", "{context}")
-#         ])
-
-#         # BEFORE calling LLM: print context shape
-#         print("--- extract_details: calling intent LLM with context ---")
-#         llm_intent = await (intent_prompt | intent_extractor_llm_structured).ainvoke({
-#             "context": full_context
-#         })
-#         print("--- extract_details: intent LLM returned ---")
-#         print("RAW llm_intent (repr):", repr(llm_intent))
-#         # if it's a Pydantic model class `UserIntent`, convert and inspect
-#         if isinstance(llm_intent, UserIntent):
-#             user_intent = llm_intent
-#             print("Predicted user intent (UserIntent object):", _to_plain(user_intent))
-#         else:
-#             # try to coerce to plain
-#             try:
-#                 print("llm_intent is not UserIntent instance; trying to plain-encode it.")
-#                 print("llm_intent (jsonable):", _to_plain(llm_intent))
-#                 # If it contains the expected shape, convert to UserIntent-like dict
-#                 # but do not force an actual UserIntent object unless required.
-#                 user_intent = _to_plain(llm_intent)
-#             except Exception:
-#                 user_intent = None
-#                 print("Could not parse llm_intent into user_intent. Setting None.")
-
-#     except Exception as e:
-#         print(f"!!! ERROR during intent extraction: {e} !!!")
-#         traceback.print_exc()
-
-#     # Final debug print before returning node output
-#     print("--- Node: extract_details (EXIT) ---")
-#     print("final extracted_data (plain):", _to_plain(extracted_data))
-#     print("final user_intent (plain):", _to_plain(user_intent))
-
-#     return {
-#         "extracted_details": extracted_data,
-#         "user_intent": user_intent
-#     }
 
 async def extract_details(state: GraphState) -> Dict:
     """
