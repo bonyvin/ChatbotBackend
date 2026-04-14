@@ -509,9 +509,68 @@ async def get_po_details(po_id: str) -> List[Dict[str, Any]]:
         except Exception:
             pass
 
-async def generate_response(state: GraphState) -> Dict:
+# async def generate_response(state: GraphState) -> Dict:
+#     print("--- Node: generate_response ---")
+#     # This node already expects state["candidate_po_id"] to exist
+#     po_id = state["candidate_po_id"]
+#     print("Po Id:", po_id)
+
+#     try:
+#         po_rows = await get_po_details(po_id)
+#     except Exception as e:
+#         print(f"!!! Error calling get_po_details: {e} !!!")
+#         po_rows = []
+
+#     if po_rows:
+#         supplier_ids = list({row["supplierId"] for row in po_rows})
+#         item_ids = list({row["itemId"] for row in po_rows})
+#         print(f"--- PO Details fetched. Suppliers: {supplier_ids}, Items: {item_ids} ---")
+
+#         followup_system = (
+#             f"You retrieved details for PO '{po_id}'. "
+#             f"Supplier IDs: {supplier_ids}. Items: {item_ids}."
+#         )
+#         po_item_ids=(f" Items from PO: {item_ids}.")
+#         last_human = ""
+#         if state["messages"] and isinstance(state["messages"][-1], HumanMessage):
+#             last_human = state["messages"][-1].content
+
+#         # followup_prompt = ChatPromptTemplate.from_messages([
+#         #     ("system", followup_system),
+#         #     ("human", last_human)
+#         # ])
+#         followup_prompt = ChatPromptTemplate.from_messages([
+#             ("system", system_prompt_content),
+#             ("human", last_human+po_item_ids)
+#         ])
+#         followup_chain = followup_prompt | chat_model
+
+#         final_content = ""
+#         async for chunk in followup_chain.astream({}):
+#             if chunk.content:
+#                 final_content += chunk.content
+
+#         response_message = AIMessage(content=final_content)
+
+#         # UPDATE last_po_id so the next time we don’t re-route on the same PO again
+#         return {
+#             "llm_response_content": final_content,
+#             "messages": [response_message],
+#             "last_po_id": po_id
+#         }
+#     else:
+#         fallback = f"I couldn't find any details for PO '{po_id}'. Please check the number and try again."
+#         response_message = AIMessage(content=fallback)
+#         return {
+#             "llm_response_content": fallback,
+#             "messages": [response_message],
+#             # Leave last_po_id unchanged if no rows found
+#             "last_po_id": state.get("last_po_id")
+#         }
+
+async def generate_response(state: 'GraphState') -> Dict:
     print("--- Node: generate_response ---")
-    # This node already expects state["candidate_po_id"] to exist
+
     po_id = state["candidate_po_id"]
     print("Po Id:", po_id)
 
@@ -521,56 +580,82 @@ async def generate_response(state: GraphState) -> Dict:
         print(f"!!! Error calling get_po_details: {e} !!!")
         po_rows = []
 
-    if po_rows:
-        supplier_ids = list({row["supplierId"] for row in po_rows})
-        item_ids = list({row["itemId"] for row in po_rows})
-        print(f"--- PO Details fetched. Suppliers: {supplier_ids}, Items: {item_ids} ---")
-
-        followup_system = (
-            f"You retrieved details for PO '{po_id}'. "
-            f"Supplier IDs: {supplier_ids}. Items: {item_ids}."
-        )
-        po_item_ids=(f" Items from PO: {item_ids}.")
-        last_human = ""
-        if state["messages"] and isinstance(state["messages"][-1], HumanMessage):
-            last_human = state["messages"][-1].content
-
-        # followup_prompt = ChatPromptTemplate.from_messages([
-        #     ("system", followup_system),
-        #     ("human", last_human)
-        # ])
-        followup_prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt_content),
-            ("human", last_human+po_item_ids)
-        ])
-        followup_chain = followup_prompt | chat_model
-
-        final_content = ""
-        async for chunk in followup_chain.astream({}):
-            if chunk.content:
-                final_content += chunk.content
-
-        response_message = AIMessage(content=final_content)
-
-        # UPDATE last_po_id so the next time we don’t re-route on the same PO again
-        return {
-            "llm_response_content": final_content,
-            "messages": [response_message],
-            "last_po_id": po_id
-        }
-    else:
+    if not po_rows:
         fallback = f"I couldn't find any details for PO '{po_id}'. Please check the number and try again."
-        response_message = AIMessage(content=fallback)
         return {
             "llm_response_content": fallback,
-            "messages": [response_message],
-            # Leave last_po_id unchanged if no rows found
+            "messages": [AIMessage(content=fallback)],
             "last_po_id": state.get("last_po_id")
         }
 
+    # Extract PO info
+    supplier_ids = list({row["supplierId"] for row in po_rows})
+    item_ids = list({row["itemId"] for row in po_rows})
+
+    print(f"--- PO Details fetched. Suppliers: {supplier_ids}, Items: {item_ids} ---")
+
+    # Build context
+    po_context = f"PO '{po_id}' has supplier(s): {supplier_ids} and item(s): {item_ids}."
+
+    # Extract messages like direct_response
+    messages = state.get("messages", [])
+    history = []
+    last_human_message = ""
+
+    if messages:
+        history = list(messages[:-1])
+
+        if isinstance(messages[-1], HumanMessage):
+            last_human_message = messages[-1].content
+        else:
+            for msg in reversed(messages):
+                if isinstance(msg, HumanMessage):
+                    last_human_message = msg.content
+                    break
+
+    # Prompt (MATCH direct_response style)
+    prompt_template = ChatPromptTemplate.from_messages([
+        ("system", system_prompt_content + "\n\n" + po_context),
+        MessagesPlaceholder(variable_name="history"),
+        ("human", "{user_input}")
+    ])
+
+    chain = prompt_template | chat_model
+
+    final_content = ""
+
+    print("--- Node generate_response: Starting internal .astream() ---")
+    stream_ran = False
+    stream_chunk_count = 0
+
+    try:
+        async for chunk in chain.astream({
+            "history": history,
+            "user_input": last_human_message
+        }):
+            stream_ran = True
+            stream_chunk_count += 1
+
+            print(f"--- Node generate_response: Internal chunk {stream_chunk_count}: '{chunk.content}' ---")
+
+            if chunk.content:
+                final_content += chunk.content
+
+        print(f"--- Node generate_response: Internal .astream() FINISHED. Ran: {stream_ran}. Chunks: {stream_chunk_count}. Content length: {len(final_content)} ---")
+
+    except Exception as e:
+        print(f"!!! ERROR in generate_response astream: {e} !!!")
+        traceback.print_exc()
+        final_content = f"Error generating response: {e}"
+    response_message = AIMessage(content=final_content)
+    return {
+        "llm_response_content": final_content,
+        "messages": [response_message],
+        "last_po_id": po_id
+    }
 async def detect_po(state: GraphState) -> Dict:
     """
-    Invokes the PO‐detector LLM. If a new PO is found (and differs from last_po_id),
+    Invokes the PO-detector LLM. If a new PO is found (and differs from last_po_id),
     store it as state['candidate_po_id']; otherwise store None.
     """
     messages = state.get("messages", [])

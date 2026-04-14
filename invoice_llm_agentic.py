@@ -103,36 +103,24 @@ if not OPENAI_API_KEY:
 print(f"LangSmith tracing enabled: {os.getenv('LANGCHAIN_TRACING_V2') == 'true'}")
 print(f"LangSmith project: {os.getenv('LANGCHAIN_PROJECT')}")
 # Using Literal for simplicity as there are a fixed set of strings
-
-# InvoiceType = Literal["Merchandise", "Non - Merchandise", "Debit Note", "Credit Note"]
-# class ExtractedField(BaseModel):
-#     value: Optional[Any] = None
-#     is_example: bool = False
-
-# class ExtractedInvoiceItem(BaseModel):
-#     item_id: Optional[ExtractedField] = None
-#     quantity: Optional[ExtractedField] = None
-#     invoice_cost: Optional[ExtractedField] = None
-
-# class ExtractedInvoiceDetails(BaseModel):
-#     po_number: Optional[ExtractedField] = None
-#     invoice_number: Optional[ExtractedField] = None
-#     invoice_type: Optional[ExtractedField] = None
-#     date: Optional[ExtractedField] = None
-#     total_amount: Optional[ExtractedField] = None
-#     total_tax: Optional[ExtractedField] = None
-#     items: Optional[List[ExtractedInvoiceItem]] = None
-#     supplier_id: Optional[ExtractedField] = None
-#     email: Optional[ExtractedField] = None
-# class PoIdDetection(BaseModel):
-#     """
-#     Structured output for detecting a Purchase Order ID in text.
-#     """
-#     po_id_found: bool = Field(False, description="True if a Purchase Order ID was detected in the text.")
-#     extracted_po_id: Optional[str] = Field(None, description="The extracted Purchase Order ID, if found.")
-
 InvoiceType = Literal["Merchandise", "Non - Merchandise", "Debit Note", "Credit Note"]
 
+class UserIntent(BaseModel):
+    intent: Optional[str] = Field(None)
+
+    @field_validator('intent', mode='before')
+    @classmethod
+    def extract_intent_value(cls, v: Any) -> Any:
+        """Extract value from nested dict structure"""
+        if v is None:
+            return None
+        if isinstance(v, dict) and 'value' in v:
+            return v['value']
+        return v
+
+    class Config:
+        populate_by_name = True
+        extra = 'ignore'
 class ExtractedField(BaseModel):
     """Wrapper for extracted values with example flag"""
     value: Optional[Any] = None
@@ -371,6 +359,7 @@ class GraphState(TypedDict):
     extracted_details: Optional[ExtractedInvoiceDetails]
     last_po_id: Optional[str]       # ← we store the last‐used PO here
     candidate_po_id: Optional[str]  # ← this will be set by detect_po
+    user_intent: Optional[UserIntent] # Intent extracted from user input - for persisting state if needed
 
 # --- Graph Nodes ---
 async def preprocess_input(state: GraphState) -> Dict:
@@ -612,161 +601,6 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
     return {"llm_response_content": final_content, "messages": [response_message]}
 
 intent_system=invoice_intent_system
-# async def extract_details(state: GraphState) -> Dict:
-#     """
-#     Node to extract structured promotion details and user intent from the conversation.
-#     Now with robust type error handling.
-#     """
-#     print("--- Node: extract_details (ENTER) ---")
-#     extracted_data: Optional[ExtractedInvoiceDetails] = None
-#     user_intent: Optional[UserIntent] = None
-
-#     # Build chat_history string
-#     chat_history_lines: List[str] = []
-#     for msg in state.get("messages", []):
-#         if isinstance(msg, HumanMessage):
-#             chat_history_lines.append(f"User: {msg.content}")
-#         elif isinstance(msg, AIMessage):
-#             chat_history_lines.append(f"Bot: {msg.content}")
-#         else:
-#             if hasattr(msg, "content"):
-#                 chat_history_lines.append(f"Bot: {msg.content}")
-#     chat_history_str = "\n".join(chat_history_lines)
-#     try:
-#         prompt_filled = invoice_extraction_prompt.replace("{{extracted_text}}", chat_history_str)
-#     except Exception as e:
-#         print(f"Error formatting template: {e}")
-#         prompt_filled = invoice_extraction_prompt
-
-#     # Extract promotion details
-#     try:
-#         detail_prompt = ChatPromptTemplate.from_messages([
-#             ("system", prompt_filled)
-#         ])
-#         print("--- extract_details: invoking extractor_llm_structured ---")
-#         llm_result = await (detail_prompt | extractor_llm_structured).ainvoke({})
-#         print("--- extract_details: extractor_llm_structured returned ---")
-        
-#         try:
-#             print("RAW llm_result (repr):", repr(llm_result))
-#         except Exception:
-#             print("RAW llm_result: <unprintable>")
-
-#         # Handle the LLM result robustly
-#         if isinstance(llm_result, ExtractedInvoiceDetails):
-#             extracted_data = llm_result
-#             print("--- extract_details: extracted_data populated (direct) ---")
-#         elif isinstance(llm_result, dict):
-#             # Try to parse the dict into our model
-#             try:
-#                 extracted_data = ExtractedInvoiceDetails.model_validate(llm_result)
-#                 print("--- extract_details: extracted_data populated (from dict) ---")
-#             except Exception as parse_error:
-#                 print(f"!!! ERROR parsing dict to ExtractedInvoiceDetails: {parse_error}")
-#                 # Try manual unwrapping as fallback
-#                 try:
-#                     unwrapped = unwrap_nested_values(llm_result)
-#                     extracted_data = ExtractedInvoiceDetails.model_validate(unwrapped)
-#                     print("--- extract_details: extracted_data populated (after unwrapping) ---")
-#                 except Exception as unwrap_error:
-#                     print(f"!!! ERROR after unwrapping: {unwrap_error}")
-#                     traceback.print_exc()
-#         else:
-#             print(f"--- Warning: LLM returned unexpected type: {type(llm_result)}")
-#             try:
-#                 extracted_data = _to_plain(llm_result)
-#                 print("extract_details: salvaged extracted_data:", extracted_data)
-#             except Exception:
-#                 pass
-        
-#         if extracted_data:
-#             print("extracted_data (plain):", _to_plain(extracted_data))
-            
-#     except Exception as e:
-#         print(f"!!! ERROR during promotion detail extraction: {e} !!!")
-#         traceback.print_exc()
-
-#     # Extract user intent
-#     try:
-#         print("--- extract_details: Starting intent extraction ---")
-#         last_bot_message = None
-#         current_user_message = None
-#         current_bot_message = None
-
-#         relevant_msgs = [msg for msg in state.get("messages", []) 
-#                         if isinstance(msg, (HumanMessage, AIMessage))]
-#         human_msgs = [msg for msg in relevant_msgs if isinstance(msg, HumanMessage)]
-#         ai_msgs = [msg for msg in relevant_msgs if isinstance(msg, AIMessage)]
-
-#         if len(ai_msgs) >= 2:
-#             last_bot_message = ai_msgs[-2].content
-#         if human_msgs:
-#             current_user_message = human_msgs[-1].content
-#         if ai_msgs:
-#             current_bot_message = ai_msgs[-1].content
-
-#         last_bot_message = last_bot_message or ""
-#         current_user_message = current_user_message or ""
-#         current_bot_message = current_bot_message or ""
-
-#         full_context = f"""Previous Bot: {last_bot_message}
-#         Current User: {current_user_message}
-#         Current Bot: {current_bot_message}"""
-
-#         print("INTENT CLASSIFIER CONTEXT >>>")
-#         print(full_context)
-
-#         intent_prompt = ChatPromptTemplate.from_messages([
-#             ("system", intent_system),
-#             ("human", "{context}")
-#         ])
-
-#         print("--- extract_details: calling intent LLM with context ---")
-#         llm_intent = await (intent_prompt | intent_extractor_llm_structured).ainvoke({
-#             "context": full_context
-#         })
-#         print("--- extract_details: intent LLM returned ---")
-#         print("RAW llm_intent (repr):", repr(llm_intent))
-        
-#         # Handle intent result
-#         if isinstance(llm_intent, UserIntent):
-#             user_intent = llm_intent
-#             print("Predicted user intent (UserIntent object):", _to_plain(user_intent))
-#         elif isinstance(llm_intent, dict):
-#             try:
-#                 user_intent = UserIntent.model_validate(llm_intent)
-#                 print("Predicted user intent (from dict):", _to_plain(user_intent))
-#             except Exception as intent_error:
-#                 print(f"Could not parse intent dict: {intent_error}")
-#                 # Try unwrapping
-#                 try:
-#                     unwrapped_intent = unwrap_nested_values(llm_intent)
-#                     user_intent = UserIntent.model_validate(unwrapped_intent)
-#                     print("Predicted user intent (after unwrapping):", _to_plain(user_intent))
-#                 except Exception:
-#                     user_intent = _to_plain(llm_intent)
-#         else:
-#             try:
-#                 print("llm_intent is not UserIntent instance; trying to plain-encode it.")
-#                 user_intent = _to_plain(llm_intent)
-#                 print("llm_intent (jsonable):", user_intent)
-#             except Exception:
-#                 user_intent = None
-#                 print("Could not parse llm_intent into user_intent. Setting None.")
-
-#     except Exception as e:
-#         print(f"!!! ERROR during intent extraction: {e} !!!")
-#         traceback.print_exc()
-
-#     # Final output
-#     print("--- Node: extract_details (EXIT) ---")
-#     print("final extracted_data (plain):", _to_plain(extracted_data))
-#     print("final user_intent (plain):", _to_plain(user_intent))
-
-#     return {
-#         "extracted_details": extracted_data,
-#         "user_intent": user_intent
-#     }
 
 async def extract_details(state: GraphState) -> Dict:
     """
@@ -1037,6 +871,12 @@ async def extract_details_old(state: GraphState) -> Dict:
         print(f"!!! ERROR during detail extraction: {e} !!!")
         traceback.print_exc()
     return {"extracted_details": extracted_data}
+def read_field(obj, key):
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
 
 def should_continue(state: GraphState) -> str:
     """
@@ -1046,13 +886,20 @@ def should_continue(state: GraphState) -> str:
     user_intent = None
 
     try:
-        user_intent = getattr(state.get("user_intent"), "intent", None)
+        print("state:",state)
+        user_intent = read_field(state.get("user_intent"), "intent")
+        po_detected = read_field(state.get("extracted_details"), "po_number")
+        print("User Intent in should_continue:", user_intent)
+        print("PO Detected in should_continue:", po_detected)
     except Exception as e:
         print(f"Error reading state in should_continue: {e}")
 
     if user_intent and user_intent.lower() == "submission":
         print("✅ User confirmed submission. Ending conversation.")
         return END
+    # elif po_detected:
+    #     print("🔄 Detected PO number in extracted details. Continuing conversation.")
+    #     return "preprocess_input"
 
     # Instead of looping back to preprocess_input, END here
     # and wait for the next user message via WebSocket
@@ -1116,10 +963,6 @@ async def generate_response(state: GraphState) -> Dict:
         if state["messages"] and isinstance(state["messages"][-1], HumanMessage):
             last_human = state["messages"][-1].content
 
-        # followup_prompt = ChatPromptTemplate.from_messages([
-        #     ("system", followup_system),
-        #     ("human", last_human)
-        # ])
         followup_prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt_content),
             ("human", last_human+po_item_ids)
@@ -1127,9 +970,33 @@ async def generate_response(state: GraphState) -> Dict:
         followup_chain = followup_prompt | chat_model
 
         final_content = ""
-        async for chunk in followup_chain.astream({}):
-            if chunk.content:
-                final_content += chunk.content
+        # async for chunk in followup_chain.astream({}):
+        #     if chunk.content:
+        #         final_content += chunk.content
+        # ✅ ADD FULL STREAM DEBUGGING (same as direct_response)
+        print("--- Node generate_response: Starting internal .astream() ---")
+        stream_ran = False
+        stream_chunk_count = 0
+
+        try:
+            async for chunk in followup_chain.astream({}):
+                stream_ran = True
+                stream_chunk_count += 1
+                print(f"--- Node generate_response: Internal chunk {stream_chunk_count}: '{chunk.content}' ---")
+
+                if chunk.content:
+                    final_content += chunk.content
+
+            print(
+                f"--- Node generate_response: Internal .astream() FINISHED. "
+                f"Ran: {stream_ran}. Chunks: {stream_chunk_count}. "
+                f"Content length: {len(final_content)} ---"
+            )
+
+        except Exception as stream_err:
+            print(f"!!! ERROR internal .astream() in generate_response: {stream_err} !!!")
+            traceback.print_exc()
+            final_content = f"Sorry, an error occurred while generating the response: {stream_err}"
 
         response_message = AIMessage(content=final_content)
 
@@ -1264,6 +1131,7 @@ workflow.add_conditional_edges(
         END: END,  # Stop when complete or on submission
     },
 )
+
 async def stream_response_generator_invoice(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
     """
     Streams LLM response chunks for the client.  

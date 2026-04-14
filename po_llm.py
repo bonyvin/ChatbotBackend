@@ -3,12 +3,12 @@ import os
 import uuid
 import json
 import traceback # For detailed error logging
-from typing import Dict, List, Optional, TypedDict, Annotated, Sequence, AsyncIterator
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Annotated, Sequence, AsyncIterator
 
 import operator
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse # Import StreamingResponse
-from pydantic import AliasChoices, BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field,field_validator
 from dotenv import load_dotenv
 from sqlalchemy import text
 from requests import Session # Assuming Session is used within get_db
@@ -108,7 +108,22 @@ if not OPENAI_API_KEY:
 
 print(f"LangSmith tracing enabled: {os.getenv('LANGCHAIN_TRACING_V2') == 'true'}")
 print(f"LangSmith project: {os.getenv('LANGCHAIN_PROJECT')}")
+class UserIntent(BaseModel):
+    intent: Optional[str] = Field(None)
 
+    @field_validator('intent', mode='before')
+    @classmethod
+    def extract_intent_value(cls, v: Any) -> Any:
+        """Extract value from nested dict structure"""
+        if v is None:
+            return None
+        if isinstance(v, dict) and 'value' in v:
+            return v['value']
+        return v
+
+    class Config:
+        populate_by_name = True
+        extra = 'ignore'
 # Define the Pydantic model for individual items within the order
 class OrderItem(BaseModel):
     """
@@ -195,6 +210,7 @@ class GraphState(TypedDict):
     sql_results: Optional[List[Dict] | str] # Results from DB execution or error string
     llm_response_content: Optional[str] # Content from the main LLM response node (to be streamed)
     extracted_details: Optional[ExtractedPurchaseOrderDetails] # Details extracted from LLM response
+    user_intent: Optional[UserIntent] # Intent extracted from user input - for persisting state if needed
 
 # --- Graph Nodes ---
 
