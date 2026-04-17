@@ -7,7 +7,6 @@ from typing import Dict,Tuple, Optional, Any, AsyncIterator
 from fastapi import BackgroundTasks, FastAPI,Depends, Form,HTTPException,status
 import uuid
 from insightGeneration import generate_supplier_insights
-from main import db_query_insights
 from pydantic import BaseModel, EmailStr;
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -45,6 +44,8 @@ from fastapi_mail import FastMail, MessageSchema, MessageType
 from fastapi import UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from fastapi import WebSocket, WebSocketDisconnect
+from sqlalchemy.sql import text
+
 app = FastAPI(
     title="LangGraph Chatbot API",
     description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
@@ -272,6 +273,32 @@ def create_promotion_details(promoDetails: List[PromotionDetailsSchema], db: Ses
         db.commit()
         db.refresh(db_promoDetails)
     return {"message": "Promotion details added successfully!"}
+
+def db_query_insights(query: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    """Generic database query executor with error handling."""
+    db = None # Initialize db to None
+    try:
+        db = next(get_db())
+        # Use .mappings().fetchall() to get list of dict-like objects directly
+        result = db.execute(text(query), params or {}).mappings().fetchall()
+        # Alternatively, if using older SQLAlchemy or prefer explicit dict conversion:
+        # result_proxy = db.execute(text(query), params or {})
+        # result = [dict(row) for row in result_proxy.fetchall()]
+        return result
+    except Exception as e:
+        # Log the actual error!
+        logging.error(f"Database error executing query: {query} with params: {params}", exc_info=True)
+        return []
+    finally:
+        if db:
+            # It's generally better practice to manage the session lifecycle
+            # using a context manager within the calling scope (e.g., using the
+            # contextmanager get_db provides), rather than closing here,
+            # but keeping db.close() based on your original structure.
+            try:
+                db.close()
+            except Exception as close_err:
+                logging.error(f"Error closing DB session: {close_err}", exc_info=True)
 
 @app.get("/supplier-risk-insights")
 async def supplier_risk(supplierId:str):

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from datetime import datetime
 import io
@@ -203,7 +204,7 @@ def get_quality_metrics_from_db(supplier_id: str, db_query_func: DbQueryFunc) ->
 
 
 # --- Placeholder function for Langchain Integration ---
-def generate_llm_key_insights(metrics: Dict[str, Any]) -> str:
+async def generate_llm_key_insights(metrics: Dict[str, Any]) -> str:
     """
     Generates key insights using an LLM (e.g., via Langchain).
     This is a placeholder implementation.
@@ -244,10 +245,11 @@ Based *only* on these metrics, provide 3-4 concise key insights written in natur
         # --- Example Langchain Setup (Requires API Key & Installation) ---
         # Make sure OPENAI_API_KEY is set as an environment variable
         # os.environ["OPENAI_API_KEY"] = "your_api_key_here" # Or use other auth methods
-        llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0.5, streaming=True, api_key=OPENAI_API_KEY)
+        llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0.5, api_key=OPENAI_API_KEY)
+        # llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0.5, streaming=True, api_key=OPENAI_API_KEY)
 
         # --- Make the LLM Call ---
-        response = llm.invoke([HumanMessage(content=prompt)])
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
         insights_text = response.content
 
         # --- Placeholder Implementation ---
@@ -271,6 +273,214 @@ Based *only* on these metrics, provide 3-4 concise key insights written in natur
         logging.error(f"Error during LLM insight generation: {e}", exc_info=True)
         return f"Error generating insights: {e}"
 
+# def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:float,defective_rate:float,avg_delay:float,risk_score:float):
+#     # --- constants to match your CSS tileImg width: 8.5rem ---
+#     REM_IN_PX    = 16
+#     TILE_REM     = 8.5
+#     # If you want a crisp retina graphic, multiply by 2 (or 3)
+#     SCALE_FACTOR = 2
+
+#     TILE_PX = int(REM_IN_PX * TILE_REM * SCALE_FACTOR)  # = 136px * 2 = 272px
+#     # --- 1) Delivery Performance Bar Chart ---
+# # --- 1) Delivery Performance Bar Chart ---
+#     bar_fig = go.Figure(data=[
+#         go.Bar(name='Fill Rate',    x=['Fill Rate'],    y=[fill_rate],    marker_color='#1c244b',   width=0.8),
+#         go.Bar(name='Pending Rate', x=['Pending Rate'], y=[pending_rate], marker_color='mediumturquoise', width=0.8)
+#     ])
+
+#     bar_fig.update_layout(
+#         template='plotly_white',
+#         barmode='group',
+#         width=TILE_PX*1.25,
+#         height=TILE_PX*1.25,
+#         margin=dict(l=20, r=20, t=40, b=30),
+#         # title=dict(text='Delivery Performance', font=dict(size=16)),
+#         legend=dict(font=dict(size=12)),
+#         xaxis=dict(title='Metric', title_font=dict(size=14), tickfont=dict(size=6.5)),
+#         yaxis=dict(title='% of Items', title_font=dict(size=14), tickfont=dict(size=12)),
+#         bargap=0.9  # Adjust this value to increase/decrease space between bars (0.1 - 1.0)
+#     )
+
+#     # --- 2) Quality Breakdown Pie Chart ---
+#     colors = ['#1c244b', 'mediumturquoise']
+#     pie_fig = go.Figure(data=[
+#         go.Pie(
+#             labels=['Non-Defective','Defective'],
+#             values=[non_defective_rate, defective_rate],
+#             hole=0.4,
+#             textinfo='percent',
+#             textfont=dict(size=14)
+#         )
+#     ])
+#     pie_fig.update_layout(
+#         template='plotly_white',
+#         width=TILE_PX*1.25,
+#         height= TILE_PX*1.25,
+#         margin= dict(l=20, r=20, t=40, b=20),
+#         # title = dict(text='Quality Breakdown', font=dict(size=16)),
+#         legend= dict(font=dict(size=12))
+#     )
+#     pie_fig.update_traces(hoverinfo='label+percent', textinfo='value', textfont_size=20,
+#                     marker=dict(colors=colors, line=dict(color='#000000')))
+#     # --- 3) Supplier Risk Gauge Chart ---
+#     gauge_fig = go.Figure(go.Indicator(
+#         mode="gauge+number",
+#         value=risk_score,
+#         # title={'text': "Supplier Risk Score", 'font':{'size':16}},
+#         number={'font':{'size':20}},
+#         gauge={
+#             'axis': {'range': [0, 1], 'tickfont':{'size':12}},
+#             'bar':  {'color': "mediumturquoise"},
+#             'steps': [
+#                 {'range': [0,0.5], 'color': "#1c244b"},
+#                 # {'range': [1.5,3.5], 'color': "#1c244b"},
+#                 {'range': [0.5,1],   'color': "#1c244b"},
+#             ],
+#             'threshold': {
+#                 'line': {'color': "white", 'width': 3},
+#                 'thickness': 0.75,
+#                 'value': risk_score
+#             }
+#         }
+#     ))
+#     gauge_fig.update_layout(
+#         template='plotly_white',
+#         width=TILE_PX*1.25,
+#         height= TILE_PX*1.25,
+#         margin= dict(l=20, r=20, t=40, b=20)
+#     )
+
+#     # --- 4) Average Delivery Delay Box Plot ---
+#     delay_fig = go.Figure(data=[
+#         go.Box(
+#             y=[avg_delay],
+#             name="Delay",
+#             boxpoints=False,
+#             marker_color='#1c244b'
+#         )
+#     ])
+#     delay_fig.update_layout(
+#         template='plotly_white',
+#         width=TILE_PX*1.25,
+#         height= TILE_PX*1.25,
+#         margin= dict(l=20, r=20, t=40, b=30),
+#         # title = dict(text='Avg Delay (days)', font=dict(size=16)),
+#         yaxis = dict(title='Days',      title_font=dict(size=14), tickfont=dict(size=12))
+#     )
+#     def fig_to_bytes(fig):
+#         buf = io.BytesIO()
+#         fig.write_image(buf, format="png")
+#         return buf.getvalue()
+#     # Render each figure to raw bytes
+#     bar_bytes   = fig_to_bytes(bar_fig)
+#     pie_bytes   = fig_to_bytes(pie_fig)
+#     gauge_bytes = fig_to_bytes(gauge_fig)
+#     delay_bytes = fig_to_bytes(delay_fig)
+
+#     # Base-64 encode & add a data URI prefix so it's directly displayable in browsers
+#     def to_data_uri(img_bytes):
+#         b64 = base64.b64encode(img_bytes).decode("ascii")
+#         return f"data:image/png;base64,{b64}"
+
+#     return {
+#             "bar_chart"   : to_data_uri(bar_bytes),
+#             "pie_chart"   : to_data_uri(pie_bytes),
+#             "gauge_chart" : to_data_uri(gauge_bytes),
+#             "delay_chart" : to_data_uri(delay_bytes),
+#         }
+
+def plot_all_graphs(fill_rate: float, pending_rate: float, non_defective_rate: float,
+                    defective_rate: float, avg_delay: float, risk_score: float) -> dict:
+
+    REM_IN_PX    = 16
+    TILE_REM     = 8.5
+    SCALE_FACTOR = 2
+    TILE_PX      = int(REM_IN_PX * TILE_REM * SCALE_FACTOR)
+
+    # --- 1) Delivery Performance Bar Chart ---
+    bar_fig = go.Figure(data=[
+        go.Bar(name='Fill Rate',    x=['Fill Rate'],    y=[fill_rate],    marker_color='#1c244b',        width=0.8),
+        go.Bar(name='Pending Rate', x=['Pending Rate'], y=[pending_rate], marker_color='mediumturquoise', width=0.8)
+    ])
+    bar_fig.update_layout(
+        template='plotly_white',
+        barmode='group',
+        width=TILE_PX * 1.25,
+        height=TILE_PX * 1.25,
+        margin=dict(l=20, r=20, t=40, b=30),
+        legend=dict(font=dict(size=12)),
+        xaxis=dict(title='Metric',     title_font=dict(size=14), tickfont=dict(size=6.5)),
+        yaxis=dict(title='% of Items', title_font=dict(size=14), tickfont=dict(size=12)),
+        bargap=0.9
+    )
+
+    # --- 2) Quality Breakdown Pie Chart ---
+    colors  = ['#1c244b', 'mediumturquoise']
+    pie_fig = go.Figure(data=[
+        go.Pie(
+            labels=['Non-Defective', 'Defective'],
+            values=[non_defective_rate, defective_rate],
+            hole=0.4,
+            textinfo='percent',
+            textfont=dict(size=14)
+        )
+    ])
+    pie_fig.update_layout(
+        template='plotly_white',
+        width=TILE_PX * 1.25,
+        height=TILE_PX * 1.25,
+        margin=dict(l=20, r=20, t=40, b=20),
+        legend=dict(font=dict(size=12))
+    )
+    pie_fig.update_traces(
+        hoverinfo='label+percent',
+        textinfo='value',
+        textfont_size=20,
+        marker=dict(colors=colors, line=dict(color='#000000'))
+    )
+
+    # --- 3) Supplier Risk Gauge Chart ---
+    gauge_fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=risk_score,
+        number={'font': {'size': 20}},
+        gauge={
+            'axis':      {'range': [0, 1], 'tickfont': {'size': 12}},
+            'bar':       {'color': 'mediumturquoise'},
+            'steps':     [
+                {'range': [0,   0.5], 'color': '#1c244b'},
+                {'range': [0.5, 1],   'color': '#1c244b'},
+            ],
+            'threshold': {'line': {'color': 'white', 'width': 3}, 'thickness': 0.75, 'value': risk_score}
+        }
+    ))
+    gauge_fig.update_layout(
+        template='plotly_white',
+        width=TILE_PX * 1.25,
+        height=TILE_PX * 1.25,
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+
+    # --- 4) Average Delivery Delay Box Plot ---
+    delay_fig = go.Figure(data=[
+        go.Box(y=[avg_delay], name="Delay", boxpoints=False, marker_color='#1c244b')
+    ])
+    delay_fig.update_layout(
+        template='plotly_white',
+        width=TILE_PX * 1.25,
+        height=TILE_PX * 1.25,
+        margin=dict(l=20, r=20, t=40, b=30),
+        yaxis=dict(title='Days', title_font=dict(size=14), tickfont=dict(size=12))
+    )
+
+    return {
+        "bar_chart"  : bar_fig.to_json(),
+        "pie_chart"  : pie_fig.to_json(),
+        "gauge_chart": gauge_fig.to_json(),
+        "delay_chart": delay_fig.to_json(),
+    }
+
+
 
 # --- Main insight generation function (Modified) ---
 async def generate_supplier_insights(supplier_id: str, db_query_func: DbQueryFunc) -> dict:
@@ -278,11 +488,23 @@ async def generate_supplier_insights(supplier_id: str, db_query_func: DbQueryFun
     Generates a risk assessment report for a given supplier, including LLM-generated insights.
     """
     # 1. Retrieve data
-    total_ordered = get_total_ordered(supplier_id, db_query_func)
-    total_delivered = get_total_delivered(supplier_id, db_query_func)
-    avg_delay = get_average_delay_for_supplier(supplier_id, db_query_func) # Now calculates avg of actual delays
-    total_received, total_damaged = get_quality_metrics_from_db(supplier_id, db_query_func)
+    # total_ordered = get_total_ordered(supplier_id, db_query_func)
+    # total_delivered = get_total_delivered(supplier_id, db_query_func)
+    # avg_delay = get_average_delay_for_supplier(supplier_id, db_query_func) # Now calculates avg of actual delays
+    # total_received, total_damaged = get_quality_metrics_from_db(supplier_id, db_query_func)
+    total_ordered = await asyncio.to_thread(get_total_ordered, supplier_id, db_query_func)
+    logging.info("✅ total_ordered done")
+    total_delivered = await asyncio.to_thread(get_total_delivered, supplier_id, db_query_func)
+    logging.info("✅ total_delivered done")
+    avg_delay = await asyncio.to_thread(get_average_delay_for_supplier, supplier_id, db_query_func)
+    logging.info("✅ avg_delay done")
+    total_received, total_damaged = await asyncio.to_thread(get_quality_metrics_from_db, supplier_id, db_query_func)
+    logging.info("✅ quality done")
 
+    # total_ordered = await asyncio.to_thread(get_total_ordered, supplier_id, db_query_func)
+    # total_delivered = await asyncio.to_thread(get_total_delivered, supplier_id, db_query_func)
+    # avg_delay = await asyncio.to_thread(get_average_delay_for_supplier, supplier_id, db_query_func)
+    # total_received, total_damaged = await asyncio.to_thread(get_quality_metrics_from_db, supplier_id, db_query_func)
     # 2. Calculate metrics
     fill_rate, pending_rate = calculate_fill_rate(total_ordered, total_delivered)
     non_defective_rate, defective_rate = calculate_quality_metrics(total_received, total_damaged)
@@ -312,7 +534,8 @@ async def generate_supplier_insights(supplier_id: str, db_query_func: DbQueryFun
     }
 
     # 4. Generate LLM Insights (using the placeholder function)
-    key_insights_text = generate_llm_key_insights(metrics_for_llm)
+    key_insights_text = await generate_llm_key_insights(metrics_for_llm)
+    logging.info("✅ LLM insights done")
 
     # 5. Format the final report string
     assessment_summary = (
@@ -325,7 +548,10 @@ async def generate_supplier_insights(supplier_id: str, db_query_func: DbQueryFun
     )
 
     final_report = assessment_summary + "\nKey Insights & Interpretation:\n" + key_insights_text
-    graph_data= await plot_all_graphs(fill_rate,pending_rate,non_defective_rate,defective_rate,avg_delay,risk_score)
+    # graph_data = await asyncio.to_thread(plot_all_graphs, fill_rate, pending_rate, non_defective_rate, defective_rate, avg_delay, risk_score)
+    # logging.info("✅ graphs done")
+    graph_data = plot_all_graphs(fill_rate, pending_rate, non_defective_rate, defective_rate, avg_delay, risk_score)
+    logging.info("✅ graphs done")
     fill_rate_dict={"fill_rate":f"{fill_rate:.1f}% delivered ({total_delivered}/{total_ordered} items)",
                     "pending_rate":f"{pending_rate:.1f}% pending."}
     quality_dict={"non_defective_rate":f"{non_defective_rate:.1f}% non-defective",
@@ -349,122 +575,7 @@ async def generate_supplier_insights(supplier_id: str, db_query_func: DbQueryFun
     return insights
 
 
-async def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:float,defective_rate:float,avg_delay:float,risk_score:float):
-    # --- constants to match your CSS tileImg width: 8.5rem ---
-    REM_IN_PX    = 16
-    TILE_REM     = 8.5
-    # If you want a crisp retina graphic, multiply by 2 (or 3)
-    SCALE_FACTOR = 2
-
-    TILE_PX = int(REM_IN_PX * TILE_REM * SCALE_FACTOR)  # = 136px * 2 = 272px
-    # --- 1) Delivery Performance Bar Chart ---
-# --- 1) Delivery Performance Bar Chart ---
-    bar_fig = go.Figure(data=[
-        go.Bar(name='Fill Rate',    x=['Fill Rate'],    y=[fill_rate],    marker_color='#1c244b',   width=0.8),
-        go.Bar(name='Pending Rate', x=['Pending Rate'], y=[pending_rate], marker_color='mediumturquoise', width=0.8)
-    ])
-
-    bar_fig.update_layout(
-        template='plotly_white',
-        barmode='group',
-        width=TILE_PX*1.25,
-        height=TILE_PX*1.25,
-        margin=dict(l=20, r=20, t=40, b=30),
-        # title=dict(text='Delivery Performance', font=dict(size=16)),
-        legend=dict(font=dict(size=12)),
-        xaxis=dict(title='Metric', title_font=dict(size=14), tickfont=dict(size=6.5)),
-        yaxis=dict(title='% of Items', title_font=dict(size=14), tickfont=dict(size=12)),
-        bargap=0.9  # Adjust this value to increase/decrease space between bars (0.1 - 1.0)
-    )
-
-    # --- 2) Quality Breakdown Pie Chart ---
-    colors = ['#1c244b', 'mediumturquoise']
-    pie_fig = go.Figure(data=[
-        go.Pie(
-            labels=['Non-Defective','Defective'],
-            values=[non_defective_rate, defective_rate],
-            hole=0.4,
-            textinfo='percent',
-            textfont=dict(size=14)
-        )
-    ])
-    pie_fig.update_layout(
-        template='plotly_white',
-        width=TILE_PX*1.25,
-        height= TILE_PX*1.25,
-        margin= dict(l=20, r=20, t=40, b=20),
-        # title = dict(text='Quality Breakdown', font=dict(size=16)),
-        legend= dict(font=dict(size=12))
-    )
-    pie_fig.update_traces(hoverinfo='label+percent', textinfo='value', textfont_size=20,
-                    marker=dict(colors=colors, line=dict(color='#000000')))
-    # --- 3) Supplier Risk Gauge Chart ---
-    gauge_fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=risk_score,
-        # title={'text': "Supplier Risk Score", 'font':{'size':16}},
-        number={'font':{'size':20}},
-        gauge={
-            'axis': {'range': [0, 1], 'tickfont':{'size':12}},
-            'bar':  {'color': "mediumturquoise"},
-            'steps': [
-                {'range': [0,0.5], 'color': "#1c244b"},
-                # {'range': [1.5,3.5], 'color': "#1c244b"},
-                {'range': [0.5,1],   'color': "#1c244b"},
-            ],
-            'threshold': {
-                'line': {'color': "white", 'width': 3},
-                'thickness': 0.75,
-                'value': risk_score
-            }
-        }
-    ))
-    gauge_fig.update_layout(
-        template='plotly_white',
-        width=TILE_PX*1.25,
-        height= TILE_PX*1.25,
-        margin= dict(l=20, r=20, t=40, b=20)
-    )
-
-    # --- 4) Average Delivery Delay Box Plot ---
-    delay_fig = go.Figure(data=[
-        go.Box(
-            y=[avg_delay],
-            name="Delay",
-            boxpoints=False,
-            marker_color='#1c244b'
-        )
-    ])
-    delay_fig.update_layout(
-        template='plotly_white',
-        width=TILE_PX*1.25,
-        height= TILE_PX*1.25,
-        margin= dict(l=20, r=20, t=40, b=30),
-        # title = dict(text='Avg Delay (days)', font=dict(size=16)),
-        yaxis = dict(title='Days',      title_font=dict(size=14), tickfont=dict(size=12))
-    )
-    def fig_to_bytes(fig):
-        buf = io.BytesIO()
-        fig.write_image(buf, format="png")
-        return buf.getvalue()
-    # Render each figure to raw bytes
-    bar_bytes   = fig_to_bytes(bar_fig)
-    pie_bytes   = fig_to_bytes(pie_fig)
-    gauge_bytes = fig_to_bytes(gauge_fig)
-    delay_bytes = fig_to_bytes(delay_fig)
-
-    # Base-64 encode & add a data URI prefix so it's directly displayable in browsers
-    def to_data_uri(img_bytes):
-        b64 = base64.b64encode(img_bytes).decode("ascii")
-        return f"data:image/png;base64,{b64}"
-
-    return {
-            "bar_chart"   : to_data_uri(bar_bytes),
-            "pie_chart"   : to_data_uri(pie_bytes),
-            "gauge_chart" : to_data_uri(gauge_bytes),
-            "delay_chart" : to_data_uri(delay_bytes),
-        }
-    
+ 
 # async def plot_all_graphs(fill_rate:float,pending_rate:float,non_defective_rate:float,defective_rate:float,avg_delay:float,risk_score:float):
 #     # 1. Bar Chart - Fill vs Pending
 #     bar_fig = go.Figure(data=[

@@ -338,7 +338,7 @@ Upon receiving a 'Yes' response, inquire whether the user would like the documen
 If you respond with an email id, I'll confirm with "Email sent successfully to [received email id].".
 
 """
-
+#promotion database schema:
 item_database_table="""
 Database Schema:
 
@@ -1245,3 +1245,98 @@ invoice_intent_system = (
     "**Return exactly** a JSON object with one key: `intent`, whose value is one of:\n"
     "  [\"Invoice Creation\", \"Detail Filling\", \"Submission\", \"Email Fetching\", \"Other\"]\n"
 )
+invoice_database_schema="""
+The user wants to query the MySQL database. Generate a **pure SQL query** without explanations, comments, or descriptions.
+
+  I have 4 tables in my database, namely:  poheader, podetails, invoiceheader, invoicedetails and suppliers .
+  - **invoicedetails**: id, itemId, itemQuantity, itemDescription, itemCost, totalItemCost, poId, invoiceNumber.
+  - **invoiceheader**: invoiceId, invoicedate, invoiceType, currency, payment_term, invoice_status, total_qty, total_cost, total_tax, total_amount, userInvNo.
+  - **podetails**: id, itemId, itemQuantity, supplierId, itemDescription, itemCost, totalItemCost, poId.
+  - **poheader**: poNumber, shipByDate, leadTime, estimatedDeliveryDate, totalQuantity, totalCost, totalTax, currency, payment_term.
+  - **suppliers**: supplierId, name, supplier_email, phone, address, lead_time.
+
+
+  ### **Field Mapping Rules**
+  - "purchase order", "purchaseorder", "PURCHASE ORDER", "PURCHASEORDER", "Purchase Order", and "PurchaseOrder" → poheader
+  - "PO number", "po_number", "po no", "PONumber", "order number" → poheader.poNumber
+  - "po_id", "poId" → podetails.poId, invoicedetails.poId
+  - "cost", "total cost" → poheader.totalCost, podetails.totalItemCost, invoicedetails.totalItemCost, invoiceheader.total_cost
+  - "payment terms", "payment_term" → poheader.payment_term, invoiceheader.payment_term
+  - "lead time", "lead_time" → poheader.leadTime, suppliers.lead_time
+  - "supplier" → suppliers
+  - "supplierId", "supplier id" → suppliers.supplierId, podetails.supplierId
+  - "total quantity" → poheader.totalQuantity, invoiceheader.total_qty
+  - "item id" → podetails.itemId, invoicedetails.itemId
+  - "item description" → podetails.itemDescription, invoicedetails.itemDescription
+  - "item cost" → podetails.itemCost, invoicedetails.itemCost
+  - "invoice number" → invoicedetails.invoiceNumber
+  - "invoice id" → invoiceheader.invoiceId
+  - "invoice date" → invoiceheader.invoicedate
+  - "invoice type" → invoiceheader.invoiceType
+  - "currency" → poheader.currency, invoiceheader.currency
+  - "invoice status" → invoiceheader.invoice_status
+  - "total qty" → invoiceheader.total_qty
+  - "total tax" → poheader.totalTax, invoiceheader.total_tax
+  - "total amount" → invoiceheader.total_amount
+  - "user invoice number" → invoiceheader.userInvNo
+### **Invoice Query Scenarios**
+    Use the following query patterns when the user asks about invoices.
+
+    **1. What is the status of invoice INV999?**
+    SELECT invoice_status 
+    FROM invoiceheader 
+    WHERE userInvNo = 'INV999';
+
+    **2. Show all pending invoices**
+    SELECT * 
+    FROM invoiceheader 
+    WHERE invoice_status = 'pending';
+
+    **3. List all invoice ids for PO123**
+    SELECT DISTINCT ih.invoiceId 
+    FROM invoiceheader ih
+    JOIN invoicedetails id ON ih.invoiceId = id.invoiceNumber
+    WHERE id.poId = 'PO123';
+
+    **4. Get all invoices created on 2025-06-12**
+    SELECT * 
+    FROM invoiceheader 
+    WHERE invoicedate = '2025-06-12';
+
+    **5. Get all invoices from 2025-03-01 to 2025-07-10**
+    SELECT * 
+    FROM invoiceheader 
+    WHERE invoicedate BETWEEN '2025-03-01' AND '2025-07-10';
+
+    **6. Show invoices with total amount > 17000**
+    SELECT * 
+    FROM invoiceheader 
+    WHERE total_amount > 17000;
+
+    **7. Total tax on invoice INV999**
+    SELECT total_tax 
+    FROM invoiceheader 
+    WHERE userInvNo = 'INV999';
+
+    ### **When NOT to Generate SQL**
+    If the user's message is a general conversational message, a confirmation, a greeting, or does not require data retrieval, respond with exactly the string: NO_SQL_NEEDED
+    Do NOT generate SQL for messages such as:
+    - Confirmations or agreements: "Yes", "No", "Sure", "Ok", "Please submit", "Yes please submit", "Confirm", "Go ahead", "That's correct"
+    - Greetings or small talk: "Hello", "Hi", "Thanks", "Thank you", "Goodbye"
+    - Instructions to act on already-provided data: "Submit the details", "Create the INvoice", "Send the email", "Save this"
+    - Questions about the chatbot itself: "What can you do?", "Help"
+    
+    IMPORTANT: Always generate SQL (do NOT return NO_SQL_NEEDED) if the message asks about:
+    - If the query involves joins between:
+      poheader, podetails, invoiceheader, invoicedetails, suppliers
+    - If the query asks for filtering, aggregation, or lookup using:
+      dates (invoicedate), amounts (total_amount, total_cost), status (invoice_status)
+    - If the message relates to supplier evaluation using:
+      supplierId from podetails or suppliers
+    - Any question that matches the Invoice Query Scenarios above.
+    
+    If in doubt and the message does not reference a specific database entity AND does not match any Invoice Query Scenario, return NO_SQL_NEEDED.
+
+    ### **Case-Insensitive Handling**
+    ### **Handling Special Characters & Spaces**
+"""

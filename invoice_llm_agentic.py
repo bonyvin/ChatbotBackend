@@ -30,7 +30,7 @@ from langchain_core.tools import Tool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
-from llm_templates import template_Invoice_without_date,po_database_schema,po_extraction_prompt,invoice_extraction_prompt,invoice_intent_system
+from llm_templates import template_Invoice_without_date,po_database_schema,po_extraction_prompt,invoice_extraction_prompt,invoice_intent_system,invoice_database_schema
 from llm_extractors import UserIntent,intent_extractor_llm_structured,intent_extractor_llm ,llm_tool_test,_to_plain,unwrap_nested_values
 
 
@@ -360,6 +360,7 @@ class GraphState(TypedDict):
     last_po_id: Optional[str]       # ← we store the last‐used PO here
     candidate_po_id: Optional[str]  # ← this will be set by detect_po
     user_intent: Optional[UserIntent] # Intent extracted from user input - for persisting state if needed
+    po_context: Optional[str] # Context about the PO, such as related supplier or items, to inform response generation
 
 # --- Graph Nodes ---
 async def preprocess_input(state: GraphState) -> Dict:
@@ -386,7 +387,7 @@ async def generate_sql(state: GraphState) -> Dict:
     # Updated prompt for SQL generation
     # Added emphasis on balanced parentheses in rule 7
     sql_generation_prompt = ChatPromptTemplate.from_messages([
-        (po_database_schema),
+        (invoice_database_schema),
         ("human", "Convert this question to a SQL SELECT query:\n\n```text\n{user_query}\n```")
     ])
     sql_generation_chain = sql_generation_prompt | sql_generator_llm | StrOutputParser()
@@ -555,9 +556,19 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
     """
     print("--- Node: generate_direct_response ---")
     messages = state.get("messages", [])
-
+    po_context = state.get("po_context")
+    print(f"Direct Response Generation - PO Context: {po_context}")
+    extra_context = ""
+    if po_context:
+        extra_context = (
+            f"\n\nPO Context:\n"
+            f"- PO ID: {po_context['po_id']}\n"
+            f"- Supplier IDs: {po_context['supplier_ids']}\n"
+            f"- Items: {po_context['item_ids']}\n"
+            f"- Instructions: {po_context['instructions']}\n"
+        )
     prompt_template = ChatPromptTemplate.from_messages([
-        ("system", system_prompt_content),
+        ("system", system_prompt_content+extra_context),
         MessagesPlaceholder(variable_name="history"),
         ("human", "{user_input}") # Get the last human message
     ])
@@ -588,7 +599,7 @@ async def generate_direct_response(state: 'GraphState') -> Dict:
             stream_ran = True
             stream_chunk_count += 1
              # *** Log internal chunk content ***
-            print(f"--- Node generate_direct_response: Internal chunk {stream_chunk_count}: '{chunk.content}' ---") # DEBUG LOG
+            # print(f"--- Node generate_direct_response: Internal chunk {stream_chunk_count}: '{chunk.content}' ---") # DEBUG LOG
             if chunk.content:
                 final_content += chunk.content
         # Log finish status
@@ -886,7 +897,7 @@ def should_continue(state: GraphState) -> str:
     user_intent = None
 
     try:
-        print("state:",state)
+        # print("state:",state)
         user_intent = read_field(state.get("user_intent"), "intent")
         po_detected = read_field(state.get("extracted_details"), "po_number")
         print("User Intent in should_continue:", user_intent)
@@ -937,10 +948,90 @@ async def get_po_details(po_id: str) -> List[Dict[str, Any]]:
         except Exception:
             pass
 
+#generate response using LLM with PO details, if a new PO is detected. 
+# async def generate_response(state: GraphState) -> Dict:
+#     print("--- Node: generate_response ---")
+#     # This node already expects state["candidate_po_id"] to exist
+#     po_id = state["candidate_po_id"]
+#     print("Po Id:", po_id)
+
+#     try:
+#         po_rows = await get_po_details(po_id)
+#     except Exception as e:
+#         print(f"!!! Error calling get_po_details: {e} !!!")
+#         po_rows = []
+
+#     if po_rows:
+#         supplier_ids = list({row["supplierId"] for row in po_rows})
+#         item_ids = list({row["itemId"] for row in po_rows})
+#         print(f"--- PO Details fetched. Suppliers: {supplier_ids}, Items: {item_ids} ---")
+
+#         followup_system = (
+#             f"You retrieved details for PO '{po_id}'. "
+#             f"Supplier IDs: {supplier_ids}. Items: {item_ids}."
+#         )
+#         po_item_ids=(f" Items from PO: {item_ids}.")
+#         last_human = ""
+#         if state["messages"] and isinstance(state["messages"][-1], HumanMessage):
+#             last_human = state["messages"][-1].content
+
+#         followup_prompt = ChatPromptTemplate.from_messages([
+#             ("system", system_prompt_content),
+#             ("human", last_human+po_item_ids)
+#         ])
+#         followup_chain = followup_prompt | chat_model
+
+#         final_content = ""
+#         # async for chunk in followup_chain.astream({}):
+#         #     if chunk.content:
+#         #         final_content += chunk.content
+#         # ✅ ADD FULL STREAM DEBUGGING (same as direct_response)
+#         print("--- Node generate_response: Starting internal .astream() ---")
+#         stream_ran = False
+#         stream_chunk_count = 0
+
+#         try:
+#             async for chunk in followup_chain.astream({}):
+#                 stream_ran = True
+#                 stream_chunk_count += 1
+#                 # print(f"--- Node generate_response: Internal chunk {stream_chunk_count}: '{chunk.content}' ---")
+
+#                 if chunk.content:
+#                     final_content += chunk.content
+
+#             print(
+#                 f"--- Node generate_response: Internal .astream() FINISHED. "
+#                 f"Ran: {stream_ran}. Chunks: {stream_chunk_count}. "
+#                 f"Content length: {len(final_content)} ---"
+#             )
+
+#         except Exception as stream_err:
+#             print(f"!!! ERROR internal .astream() in generate_response: {stream_err} !!!")
+#             traceback.print_exc()
+#             final_content = f"Sorry, an error occurred while generating the response: {stream_err}"
+
+#         response_message = AIMessage(content=final_content)
+
+#         # UPDATE last_po_id so the next time we don’t re-route on the same PO again
+#         return {
+#             "llm_response_content": final_content,
+#             "messages": [response_message],
+#             "last_po_id": po_id
+#         }
+#     else:
+#         fallback = f"I couldn't find any details for PO '{po_id}'. Please check the number and try again."
+#         response_message = AIMessage(content=fallback)
+#         return {
+#             "llm_response_content": fallback,
+#             "messages": [response_message],
+#             # Leave last_po_id unchanged if no rows found
+#             "last_po_id": state.get("last_po_id")
+#         }
+
 async def generate_response(state: GraphState) -> Dict:
-    print("--- Node: generate_response ---")
-    # This node already expects state["candidate_po_id"] to exist
-    po_id = state["candidate_po_id"]
+    print("--- Node: generate_response (helper) ---")
+
+    po_id = state.get("candidate_po_id")
     print("Po Id:", po_id)
 
     try:
@@ -949,72 +1040,59 @@ async def generate_response(state: GraphState) -> Dict:
         print(f"!!! Error calling get_po_details: {e} !!!")
         po_rows = []
 
-    if po_rows:
-        supplier_ids = list({row["supplierId"] for row in po_rows})
-        item_ids = list({row["itemId"] for row in po_rows})
-        print(f"--- PO Details fetched. Suppliers: {supplier_ids}, Items: {item_ids} ---")
-
-        followup_system = (
-            f"You retrieved details for PO '{po_id}'. "
-            f"Supplier IDs: {supplier_ids}. Items: {item_ids}."
-        )
-        po_item_ids=(f" Items from PO: {item_ids}.")
-        last_human = ""
-        if state["messages"] and isinstance(state["messages"][-1], HumanMessage):
-            last_human = state["messages"][-1].content
-
-        followup_prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt_content),
-            ("human", last_human+po_item_ids)
-        ])
-        followup_chain = followup_prompt | chat_model
-
-        final_content = ""
-        # async for chunk in followup_chain.astream({}):
-        #     if chunk.content:
-        #         final_content += chunk.content
-        # ✅ ADD FULL STREAM DEBUGGING (same as direct_response)
-        print("--- Node generate_response: Starting internal .astream() ---")
-        stream_ran = False
-        stream_chunk_count = 0
-
-        try:
-            async for chunk in followup_chain.astream({}):
-                stream_ran = True
-                stream_chunk_count += 1
-                print(f"--- Node generate_response: Internal chunk {stream_chunk_count}: '{chunk.content}' ---")
-
-                if chunk.content:
-                    final_content += chunk.content
-
-            print(
-                f"--- Node generate_response: Internal .astream() FINISHED. "
-                f"Ran: {stream_ran}. Chunks: {stream_chunk_count}. "
-                f"Content length: {len(final_content)} ---"
-            )
-
-        except Exception as stream_err:
-            print(f"!!! ERROR internal .astream() in generate_response: {stream_err} !!!")
-            traceback.print_exc()
-            final_content = f"Sorry, an error occurred while generating the response: {stream_err}"
-
-        response_message = AIMessage(content=final_content)
-
-        # UPDATE last_po_id so the next time we don’t re-route on the same PO again
+    if not po_rows:
+        print(f"--- No PO details found for {po_id} ---")
         return {
-            "llm_response_content": final_content,
-            "messages": [response_message],
-            "last_po_id": po_id
-        }
-    else:
-        fallback = f"I couldn't find any details for PO '{po_id}'. Please check the number and try again."
-        response_message = AIMessage(content=fallback)
-        return {
-            "llm_response_content": fallback,
-            "messages": [response_message],
-            # Leave last_po_id unchanged if no rows found
+            "po_context": None,
             "last_po_id": state.get("last_po_id")
         }
+
+    # Extract relevant info
+    supplier_ids = list({row["supplierId"] for row in po_rows})
+    item_ids = list({row["itemId"] for row in po_rows})
+
+    print(f"--- PO Details fetched. Suppliers: {supplier_ids}, Items: {item_ids} ---")
+
+    # Build structured context (IMPORTANT: keep it clean, not LLM formatted)
+
+    # po_context = f"Purchase Order Details:\n po_id: {po_id}\n supplier_ids: {supplier_ids}\n item_ids: {item_ids}. The supplier ids and item ids are retrieved from the database based on the detected PO number and the item idsneed to be appended to the item list provided by the user."
+    instructions = f"""
+    ### Purchase Order Context
+
+    The user has referenced Purchase Order (PO) ID: **{po_id}**.
+
+    From the database, the following details were retrieved:
+    - **Supplier IDs associated with this PO:** {supplier_ids}
+    - **Item IDs associated with this PO:** {item_ids}
+
+    ### Instructions for Processing
+
+    - The item IDs retrieved from the PO represent the **complete set of valid items** for this order.
+    - The user may provide a **partial list of items**, so you should:
+    - **Append any missing item IDs** from the PO to the user's provided item list.
+    - Ensure that all PO items are accounted for in the final response.
+
+    - If quantities or costs are missing for any items:
+    - Clearly identify those items as **missing fields**
+    - Prompt the user to provide the missing information
+
+    ### Goal
+
+    Help the user complete invoice creation by:
+    - Filling in missing PO-related details
+    - Highlighting inconsistencies
+    - Guiding them toward providing complete and correct information
+    """
+    po_context =  {
+        "po_id": po_id,
+        "supplier_ids": supplier_ids,
+        "item_ids": item_ids,
+        "instructions": instructions
+    }
+    return {
+        "po_context": po_context,
+        "last_po_id": po_id
+    }
 
 async def detect_po(state: GraphState) -> Dict:
     """
@@ -1118,8 +1196,8 @@ workflow.add_edge("execute_sql",            "generate_response_from_sql")
 # workflow.add_edge("generate_response_from_sql", "extract_details")
 workflow.add_edge("generate_response_from_sql", "generate_direct_response")
 # 5) PO-response branch
-workflow.add_edge("generate_response",      "extract_details")
-# workflow.add_edge("generate_response",      "generate_direct_response")
+# workflow.add_edge("generate_response",      "extract_details")
+workflow.add_edge("generate_response",      "generate_direct_response")
 workflow.add_edge("generate_direct_response",    "extract_details")
 # 6) Final step
 # workflow.add_edge("extract_details",        END)
@@ -1132,34 +1210,69 @@ workflow.add_conditional_edges(
     },
 )
 
+# async def stream_response_generator_invoice(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
+#     """
+#     Streams LLM response chunks for the client.  
+#     Fixes “unhashable type: 'dict'” by extracting the actual node name string.
+#     """
+#     print("--- STREAM GENERATOR (for client) STARTED ---")
+#     full_response_for_log = ""
+#     try:
+#         async for event in graph_stream:
+#             if event.get("event") == "on_chat_model_stream":
+#                 metadata = event.get("metadata", {})
+#                 node_info = metadata.get("langgraph_node")
+#                 if isinstance(node_info, dict):
+#                     node_name = node_info.get("node") or node_info.get("name")
+#                 else:
+#                     node_name = node_info
+#                 if node_name in {"generate_direct_response", "generate_response_from_sql", "generate_response"}:
+#                     chunk = event["data"].get("chunk")
+#                     if isinstance(chunk, AIMessageChunk) and chunk.content:
+#                         content = chunk.content
+#                         full_response_for_log += content
+#                         yield content
+
+#     except Exception as e:
+#         print(f"!!! ERROR in stream_response_generator_invoice: {e} !!!")
+#         yield f"\n\nStream error: {e}"
+#     finally:
+#         print(f"--- STREAM GENERATOR (for client) FINISHED ---")
+
 async def stream_response_generator_invoice(graph_stream: AsyncIterator[Dict]) -> AsyncIterator[str]:
-    """
-    Streams LLM response chunks for the client.  
-    Fixes “unhashable type: 'dict'” by extracting the actual node name string.
-    """
     print("--- STREAM GENERATOR (for client) STARTED ---")
-    full_response_for_log = ""
+    STREAMING_NODES = {"generate_direct_response", "generate_response_from_sql", "generate_response"}
+    
     try:
         async for event in graph_stream:
-            if event.get("event") == "on_chat_model_stream":
-                metadata = event.get("metadata", {})
-                node_info = metadata.get("langgraph_node")
-                if isinstance(node_info, dict):
-                    node_name = node_info.get("node") or node_info.get("name")
-                else:
-                    node_name = node_info
-                if node_name in {"generate_direct_response", "generate_response_from_sql", "generate_response"}:
-                    chunk = event["data"].get("chunk")
-                    if isinstance(chunk, AIMessageChunk) and chunk.content:
-                        content = chunk.content
-                        full_response_for_log += content
-                        yield content
+            if event.get("event") != "on_chat_model_stream":
+                continue
+
+            metadata = event.get("metadata", {})
+            
+            # Try all the ways LangGraph might report the node name
+            node_name = (
+                metadata.get("langgraph_node")          # v2 simple string
+                or metadata.get("langgraph_checkpoint_ns", "").split(":")[-1]  # fallback: ns path
+            )
+            
+            # If node_info is a dict, dig into it
+            if isinstance(node_name, dict):
+                node_name = node_name.get("node") or node_name.get("name")
+
+            print(f"DEBUG: event node_name='{node_name}', tags={event.get('tags')}")
+
+            if node_name in STREAMING_NODES:
+                chunk = event["data"].get("chunk")
+                if isinstance(chunk, AIMessageChunk) and chunk.content:
+                    yield chunk.content
 
     except Exception as e:
         print(f"!!! ERROR in stream_response_generator_invoice: {e} !!!")
         yield f"\n\nStream error: {e}"
     finally:
-        print(f"--- STREAM GENERATOR (for client) FINISHED ---")
+        print("--- STREAM GENERATOR (for client) FINISHED ---")
+
 # --- Memory and Compilation ---
 memory = MemorySaver()
 app_runnable_invoice_agentic = workflow.compile(checkpointer=memory)
