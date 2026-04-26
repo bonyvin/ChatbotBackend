@@ -1,9 +1,12 @@
 # --- FastAPI Application ---
 import asyncio
+import io
+import io
 import json
 import logging
 import traceback
 from typing import Dict,Tuple, Optional, Any, AsyncIterator
+from urllib import response
 from fastapi import BackgroundTasks, FastAPI,Depends, Form,HTTPException,status
 import uuid
 from insightGeneration import generate_supplier_insights
@@ -16,7 +19,7 @@ from promo_llm_agentic import app_runnable_promotion_agentic
 from invoice_llm import ChatRequestInvoice,stream_response_generator_invoice,app_runnable_invoice
 # from po_llm import ChatRequestPurchaseOrder,stream_response_generator_purchase_order,app_runnable_purchase_order
 from po_llm_agentic import ChatRequestPurchaseOrder,stream_response_generator_purchase_order,app_runnable_purchase_order_agentic
-from invoice_llm_agentic import app_runnable_invoice_agentic
+from invoice_llm_agentic import app_runnable_invoice_agentic, extract_text_with_langextract
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import (
     HumanMessage,
@@ -45,126 +48,51 @@ from fastapi import UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.sql import text
+from llm_templates import invoice_extraction_prompt
+from PyPDF2 import PdfReader
+from oauth import get_access_token
+import requests
 
 app = FastAPI(
     title="LangGraph Chatbot API",
     description="API endpoint for a LangChain chatbot using LangGraph, detail extraction, SQL generation, and streaming.",
 )
-
-# WebSocket endpoint
-# @app.websocket("/ws/promotion_chat")
-# async def websocket_promotion_chat(websocket: WebSocket):
-#     """
-#     WebSocket version of your /promotion_chat endpoint.
-#     Streams only tokens from the 'generate_direct_response' node.
-#     """
-#     await websocket.accept()
-#     try:
-#         while True:
-#             # Wait for the client to send a JSON start message
-#             raw = await websocket.receive_text()
-#             try:
-#                 payload = json.loads(raw)
-#             except Exception:
-#                 await websocket.send_text(json.dumps({
-#                     "type": "error",
-#                     "detail": "Invalid JSON received. Expecting { message, thread_id? }"
-#                 }))
-#                 continue
-
-#             user_message = payload.get("message", "")
-#             thread_id = payload.get("thread_id") or str(uuid.uuid4())
-#             config = {"configurable": {"thread_id": thread_id}}
-#             print(f"\n--- [Thread: {thread_id}] Received message: '{user_message}' ---")
-
-#             # build same input_state as before
-#             input_message = HumanMessage(content=user_message)
-#             input_state = {"messages": [input_message]}
-
-#             try:
-#                 # get async iterator from your graph runner
-#                 graph_stream = app_runnable_promotion.astream_events(
-#                     input_state, 
-#                     config, 
-#                     version="v2"
-#                 )
-#                 print(f"\n--- Graph stream: {graph_stream} ---")
-
-#                 # Track if we're in the generate_direct_response node
-#                 in_direct_response_node = False
-
-#                 # iterate and forward events to websocket client
-#                 async for evt in graph_stream:
-#                     try:
-#                         if not isinstance(evt, dict):
-#                             continue
-                        
-#                         event_type = evt.get("event", "")
-#                         event_name = evt.get("name", "")
-                        
-#                         # Check if we're entering/exiting the generate_direct_response node
-#                         if event_type == "on_chain_start" and "generate_direct_response" in event_name or "generate_response_from_sql" in event_name:
-#                             in_direct_response_node = True
-#                             print(f"[WS] Entering generate_direct_response node")
-#                             continue
-                        
-#                         if event_type == "on_chain_end" and "generate_direct_response" in event_name or "generate_response_from_sql" in event_name:
-#                             in_direct_response_node = False
-#                             print(f"[WS] Exiting generate_direct_response node")
-#                             continue
-                        
-#                         # Only stream tokens from generate_direct_response node
-#                         if in_direct_response_node and event_type == "on_chat_model_stream":
-#                             chunk_data = evt.get("data", {})
-#                             chunk = chunk_data.get("chunk")
-                            
-#                             if chunk and hasattr(chunk, 'content'):
-#                                 token_text = chunk.content
-#                                 if token_text:  # Only send non-empty tokens
-#                                     await websocket.send_text(json.dumps({
-#                                         "type": "token",
-#                                         "text": token_text
-#                                     }))
-#                                     print(f"[WS] Streaming token: {repr(token_text)}")
-                            
-#                     except WebSocketDisconnect:
-#                         raise
-#                     except Exception as send_exc:
-#                         print(f"Error processing event for thread {thread_id}: {send_exc}")
-#                         traceback.print_exc()
-
-#                 # finished streaming for this run
-#                 await websocket.send_text(json.dumps({"type": "done", "thread_id": thread_id}))
-#                 print(f"[WS] Stream complete for thread {thread_id}")
-
-#             except WebSocketDisconnect:
-#                 print(f"Client disconnected during stream (thread {thread_id})")
-#                 break
-#             except Exception as e:
-#                 print(f"!!! ERROR invoking graph for thread {thread_id}: {e} !!!")
-#                 traceback.print_exc()
-#                 try:
-#                     await websocket.send_text(json.dumps({
-#                         "type": "error",
-#                         "detail": f"Error processing chat (thread {thread_id})."
-#                     }))
-#                 except Exception:
-#                     pass
-#                 continue
-
-#     except WebSocketDisconnect:
-#         print("WebSocket client disconnected")
-#     except Exception as outer_e:
-#         print("Unexpected error on websocket:", outer_e)
-#         traceback.print_exc()
-#     finally:
-#         try:
-#             await websocket.close()
-#         except Exception:
-#             pass
-
     
 #Common Functions:
+#ORACLE ACCESS TOKEN
+
+@app.post("/createOraclePo")
+async def create_oracle_po(payload: Dict[str, Any]):
+    token=get_access_token()
+    ORACLE_API_URL='https://rex-npe.retail.ap-singapore-1.ocs.oraclecloud.com/rgbu-rex-modi-stg1-mfcs/MerchIntegrations';
+    ORACLE_CREATE_PO= f'{ORACLE_API_URL}/services/purchaseOrders/create'
+    # headers = {
+    # 'Accept': 'application/json',
+    # 'Authorization': token,
+    # }
+    # response = requests.request("POST", ORACLE_CREATE_PO, headers=headers, data=payload)
+
+    headers = {
+        'Accept': 'application/json',
+        'Authorization': token,
+        'Content-Type': 'application/json'
+    }
+
+    response = requests.post(
+        ORACLE_CREATE_PO,
+        headers=headers,
+        json=payload   # ✅ use json= instead of data=
+    )
+
+    print(response.text)
+    # Use the token to make authenticated requests to Oracle APIs
+    return {"Po creation message": response.text}
+
+@app.post("/oracleAccessToken")
+async def get_oracle_access():
+    token=get_access_token()
+    return {"access_token": token}
+
 #Email Functionality
 @app.post("/filenew")
 async def send_file_new(
@@ -257,7 +185,6 @@ def create_promotion_header(promoHeader: PromotionHeaderSchema, db: Session = De
     db.refresh(db_promoHeader)
 
     return db_promoHeader
-
 
 @app.post("/promotionDetails/", status_code=status.HTTP_201_CREATED)
 def create_promotion_details(promoDetails: List[PromotionDetailsSchema], db: Session = Depends(get_db)):
@@ -669,8 +596,38 @@ async def clearConversationNew(request: ChatRequestUser):
     # return {"conversation":conversation,"submissionStatus":"not submitted","chat_history":chat_histories}
     return {"message": "Cleared all conversation data."}
 
+@app.post("/uploadDocument/")
+async def upload_invoice(file: UploadFile = File(...)):
+    if file.content_type not in ["application/pdf", "image/png", "image/jpeg", "image/jpg"]:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
+    file_content = await file.read()
+    extracted_text = ""
+    if file.content_type == "application/pdf":
+        pdf_reader = PdfReader(io.BytesIO(file_content))
+        extracted_text = "\n".join(
+            [page.extract_text() for page in pdf_reader.pages if page.extract_text()]
+        )
+    else:
+        extracted_text = "This is an image file. Please describe its content."
+    return JSONResponse(content={"structured_data": extracted_text})
 
+@app.post("/uploadGpt/invoice_extraction_prompt")
+async def upload_file(file: UploadFile = File(...)):
+    # if file.content_type not in ["application/pdf", "image/png", "image/jpeg", "image/jpg"]:
+    #     raise HTTPException(status_code=400, detail="Unsupported file type")
+    # file_content = await file.read()
+    # extracted_text = ""
+    # # extracted_text = await extract_text_with_openai(file)
+    # if file.content_type == "application/pdf":
+    #     pdf_reader = PdfReader(io.BytesIO(file_content))
+    #     extracted_text = "\n".join(
+    #         [page.extract_text() for page in pdf_reader.pages if page.extract_text()]
+    #     )
+    # else:
+    #     extracted_text = "This is an image file. Please describe its content."
+    structured_data = await extract_text_with_langextract(file)
 
+    return JSONResponse(content={"structured_data": structured_data})
 # @app.post("/uploadGpt/")
 # async def upload_file(file: UploadFile = File(...)):
 #     if file.content_type not in ["application/pdf", "image/png", "image/jpeg", "image/jpg"]:

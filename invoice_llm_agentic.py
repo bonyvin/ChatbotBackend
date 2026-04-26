@@ -32,8 +32,15 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
 from llm_templates import template_Invoice_without_date,po_database_schema,po_extraction_prompt,invoice_extraction_prompt,invoice_intent_system,invoice_database_schema
 from llm_extractors import UserIntent,intent_extractor_llm_structured,intent_extractor_llm ,llm_tool_test,_to_plain,unwrap_nested_values
+from fastapi import UploadFile
+import asyncio
+from langchain_community.document_loaders import PyPDFLoader
+import io
+import tempfile
 
-
+# hypothetical langextract import (adjust based on actual package)
+from langextract import extract
+import langextract as lx
 # from promoUtils import template_Promotion_without_date
 
 # Assuming database.py and llm_templates.py are in the same directory or accessible
@@ -289,6 +296,96 @@ class ChatRequestInvoice(BaseModel):
     message: str
     thread_id: str | None = None
 # Helper functions for invoice extraction
+async def load_single_pdf(file):
+    pages = []
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    loader = PyPDFLoader(tmp_path)
+    
+    async for page in loader.alazy_load():
+        page.metadata["source_filename"] = file.filename
+        pages.append(page)
+
+    os.remove(tmp_path)
+    
+    return pages
+
+async def extract_text_with_langextract(file: UploadFile) -> Optional[ExtractedInvoiceDetails]:
+    # file_content = await file.read()
+    extracted_text = ""
+
+    # Step 1: Extract raw text
+    # if file.content_type == "application/pdf":
+    #     pdf_reader = PdfReader(io.BytesIO(file_content))
+    #     extracted_text = "\n".join(
+    #         [page.extract_text() for page in pdf_reader.pages if page.extract_text()]
+    #     )
+    # else:
+    #     extracted_text = "This is an image file. Please describe its content."
+    pages=await load_single_pdf(file)
+    pdf_text=""
+    for doc in pages:
+        extracted_text += doc.page_content
+    print(extracted_text)
+
+    # Step 2: Use a *looser schema* (important)
+    # Let Pydantic validators normalize structure instead of forcing strict nesting
+    schema = {
+        "po_number": "string",
+        "invoice_number": "string",
+        "invoice_type": "string",
+        "date": "string",
+        "total_amount": "string",
+        "total_tax": "string",
+        "supplier_id": "string",
+        "email": "string",
+        "items": [
+            {
+                "item_id": "string",
+                "quantity": "string",
+                "invoice_cost": "string",
+            }
+        ],
+    }
+
+    # Step 3: Extract using LangExtract
+    try:
+        raw_result = extract(
+            text_or_documents=extracted_text,
+            schema=schema,
+            instructions=(
+                "Extract invoice details. "
+                "Return clean structured data. "
+                "Do not hallucinate missing values."
+            )
+        )
+        raw_result2=lx.data.Extraction(
+        extraction_class="invoice",
+        extraction_text=extracted_text,
+        attributes={schema}),
+        print(raw_result2)
+    except Exception as e:
+        print(f"LangExtract failed: {e}")
+        return None
+
+    # Step 4: Let your Pydantic models do the heavy lifting
+    try:
+        extracted_data = ExtractedInvoiceDetails.model_validate(raw_result)
+        return extracted_data
+    except Exception as parse_error:
+        print(f"Validation failed: {parse_error}")
+        
+        # Optional fallback: try unwrapping if your pipeline still uses it
+        try:
+            unwrapped = unwrap_nested_values(raw_result)
+            return ExtractedInvoiceDetails.model_validate(unwrapped)
+        except Exception as fallback_error:
+            print(f"Fallback parsing failed: {fallback_error}")
+            return None
+        
 def get_field_value(extracted_field: Optional[ExtractedField]) -> Any:
     """
     Helper to safely extract the actual value from an ExtractedField.

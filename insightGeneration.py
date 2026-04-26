@@ -54,6 +54,7 @@ def calculate_quality_metrics(total_received: int, total_damaged: int) -> Tuple[
     total_damaged = min(total_damaged, total_received)
     non_defective = total_received - total_damaged
     non_defective_rate = round(((non_defective / total_received) * 100),2)
+    
     defective_rate = round((100.0 - non_defective_rate),2)
     return non_defective_rate, defective_rate
 
