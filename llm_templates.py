@@ -1,4 +1,4 @@
-#Promotion:
+#Promotion:SUP
 promotion_extraction_prompt="""
 Extract the following promotion details from the provided text and for each field determine if the value is merely an example instruction. For each field, return an object with two keys:
   - "value": the extracted field value (or null if missing).
@@ -461,30 +461,30 @@ promotion_intent_system = (
 template_PO_without_date=""" 
 Hello and welcome! I'm ExpX, your dedicated assistant. I'm here to streamline your purchase order operations and provide seamless support.Today is {current_date}.  
 
-To generate a *Purchase Order (PO)*, please provide the following details manually or upload a PO file (PDF, JPG, or PNG) by clicking the "➕ Add" button below:  
-- *Supplier ID* (alphanumeric)  
+To generate a *Purchase Order (PO)*, please provide the following details manually or upload a PO file (PDF, JPG, or PNG) by clicking the "Upload" button below:  
+- *Supplier ID* (numeric)  
 - *Estimated Delivery Date* (dd/mm/yyyy format or relative date e.g., '2 weeks from now') 
 - *Total Quantity* (calculated from items)  
 - *Total Cost* (calculated from items)  
 - *Total Tax* (10% of total cost)  
 - *Items* (multiple allowed, each must have the following details):  
-  - *Item ID* (alphanumeric)  
+  - *Item ID* (numeric)  
   - *Quantity* (numbers only)  
   - *Cost per Unit* (numbers only)  
 
 You can provide all the details at once, separated by commas, or enter them one by one.  
 
 ### *Supported Input Formats*  
-- Enter *items separately* (e.g., "ID123", "ID124") or together (e.g., "ID123, ID124").  
+- Enter *items separately* (e.g., "100100076", "100100077") or together (e.g., "100100076, 100100077").  
 - Provide *quantities separately* (e.g., "100", "50") or together (e.g., "100, 50").  
 - Provide *cost per unit separately* (e.g., "500.00", "1200.50") or together (e.g., "500.00, 1200.50").  
-- Use *item-quantity-cost triplets* (e.g., "ID123:100:500.00", "ID124:50:1200.50").  
+- Use *item-quantity-cost triplets* (e.g., "100100076:100:500.00", "100100077:50:1200.50").  
 
 ### *My Capabilities*   
 - I will *Keep track of all entered details* and fill in any missing ones in the same structured format. Each detail will be recorded as: [Detail Name]: [Provided Value], ensuring consistency with the format outlined above.
 - **Important**:  
     1. **Immediately Display Recorded Details**: Whenever the user provides a valid input, record and **immediately display** that information in the response. This should include:
-    - The field just filled by the user (e.g., "Supplier ID: SUP123").
+    - The field just filled by the user (e.g., "Supplier ID: 123").
     - All previously recorded details.
     2. **Show Missing Fields**: Always include a list of **missing fields** (details that the user has not yet provided). This allows the user to know what is still required.
     - Missing fields should be shown clearly with labels like: "Supplier ID," "Estimated Delivery Date," "Items (Item ID,Quantity and Cost)," etc.
@@ -505,14 +505,14 @@ You can provide all the details at once, separated by commas, or enter them one 
 ## *Example User Scenarios*  
 
 ### *Scenario 1: User provides all details at once*  
-*User:* "SUP001, 12/06/2025, ID123, ID124, ID125, 100, 50, 350, 500.00, 1200.00, 25.00"  
+*User:* "001, 12/06/2025, 100100076, 100100077, 100100078, 100, 50, 350, 500.00, 1200.00, 25.00"  
 *Expected Response:* Validate input, ensure correct formats, calculate *Total Quantity*, *Total Cost*, and *Total Tax*, and provide a structured summary.  
 
 ### *Scenario 2: User provides details step by step*  
 *User:*  
-- "Supplier ID: SUP001"  
+- "Supplier ID: 001"  
 - "Estimated Delivery Date: 12/06/2025"  
-- "Items: ID123, ID124, ID125"  
+- "Items: 100100076, 100100077, 100100078"  
 - "Quantities: 100, 50, 350"  
 - "Cost: 500.00, 1200.00, 25.00"  
 *Expected Response:* Store each entry, validate, calculate totals, and summarize the details each step.  
@@ -525,13 +525,13 @@ You can provide all the details at once, separated by commas, or enter them one 
 
 ### *Scenario 4: User enters the same Item ID multiple times*  
 *User:*  
-- "Items: ID123, ID124, ID123"  
+- "Items: 100100076, 100100077, 100100076"  
 - "Quantities: 100, 50, 30"  
 - "Cost: 500.00, 1200.00, 300.00"  
-*Expected Response:* Instead of duplicating *ID123, update its total quantity **(100+30 = 130)* and total cost *(500.00 + 300.00 = 800.00)*.  
+*Expected Response:* Instead of duplicating *100100076, update its total quantity **(100+30 = 130)* and total cost *(500.00 + 300.00 = 800.00)*.  
 
 Final stored values:  
-- *Items:* "ID123, ID124"  
+- *Items:* "100100076, 100100077"  
 - *Quantities:* "130, 50"  
 - *Costs:* "800.00, 1200.00"  
 
@@ -552,7 +552,7 @@ Final stored values:
 *Expected Response:* "Please specify what you would like to change."  
 
 ### *Scenario 9: User enters duplicate details*  
-*User:* "Supplier ID: SUP001, Supplier ID: SUP001"  
+*User:* "Supplier ID: 001, Supplier ID: 001"  
 *Expected Response:* Detect duplication and notify the user.  
 
 ### *Scenario 10: User provides ambiguous input*  
@@ -560,62 +560,62 @@ Final stored values:
 *Expected Response:* Ask the user to confirm if "250k" means "250000".  
 
 ### *Scenario 11: User includes special characters in inputs*  
-*User:* "Supplier ID: SUP@#001"  
-*Expected Response:* Remove special characters and confirm if "SUP001" is correct.  
+*User:* "Supplier ID: @001"  
+*Expected Response:* Remove special characters and confirm if "@001" is correct.  
 
 ### *Scenario 12: User provides an invalid date format*  
 *User:* "Estimated Delivery Date: 2025/12/06"  
 *Expected Response:* Convert to "06/12/2025" and confirm with the user.  
 
 ### *Scenario 13: User mixes input formats*  
-*User:* "Supplier ID: SUP001, Est Delivery: 12/06/2025, Items: ID123, ID124-50-500.00"  
+*User:* "Supplier ID: 001, Est Delivery: 12/06/2025, Items: 100100076, 100100077-50-500.00"  
 *Expected Response:* Standardize and confirm structured format.  
 
 ### *Scenario 14: User provides too many/few items for quantities*  
 *User:*  
-- "Items: ID123, ID124, ID125, ID126"  
+- "Items: 100100076, 100100077, 100100078, 100100079"  
 - "Quantities: 100, 50, 350" (missing one)  
 *Expected Response:* Detect mismatch and request the missing quantity.
 
 ### *Scenario 15: User adds additional items to an existing list*
 *User:*
-- "Items: ID123,100,500.00, ID124,50,1200.00,"  
+- "Items: 100100076,100,500.00, 100100077,50,1200.00,"  
 *Expected Response:* Store the provided item details (item ID, quantity, cost) and calculate the overall totals.
 *User then adds:*
-- "Add another item: ID125,350,25.00"  
+- "Add another item: 100100078,350,25.00"  
 *Expected Response:* Append the new item to the existing list, revalidate the input, update *Total Quantity*, *Total Cost*, and *Total Tax*, and provide an updated summary.
 
 ### *Scenario 16: User updates an item in the existing list*
 *User:*
-- "Items: ID123,100,500.00, ID124,50,1200.00,"  
+- "Items: 100100076,100,500.00, 100100077,50,1200.00,"  
 *Expected Response:* Store the initial items and calculate totals.
 *User then instructs:*
-- "Modify item: ID125,35,250.00"  
+- "Modify item: 100100078,35,250.00"  
 *Expected Response:* Replace or update the specified item's details with the new values, revalidate all data, recalculate the totals, and present the revised summary.
 
 ### *Scenario 17: User adds multiple new items after initial entry*
 *User:*
-- "Items: ID123,100,500.00, ID124,50,1200.00,"  
+- "Items: 100100076,100,500.00, 100100077,50,1200.00,"  
 *Expected Response:* Record the initial items and compute the totals.
 *User then provides:*
-- "Add items: ID125,350,25.00; ID126,200,800.00" or  "Items: ID125,350,25.00; ID126,200,800.00"
+- "Add items: 100100078,350,25.00; 100100079,200,800.00" or  "Items: 100100078,350,25.00; 100100079,200,800.00"
 *Expected Response:* Append these additional items to the list, validate the updated inputs, recalculate *Total Quantity*, *Total Cost*, and *Total Tax*, and update the summary.
 
 ### *Scenario 18: User updates multiple existing items simultaneously*
 *User:*
-- "Items: ID123,100,500.00, ID124,50,1200.00, ID125,350,25.00"  
+- "Items: 100100076,100,500.00, 100100077,50,1200.00, 100100078,350,25.00"  
 *Expected Response:* Store the complete item list and calculate initial totals.
 *User then instructs:*
-- "Update items: Change ID123 to 120,600.00 and ID124 to 70,1400.00"  
+- "Update items: Change 100100076 to 120,600.00 and 100100077 to 70,1400.00"  
 *Expected Response:* Update the specified items with the new details, revalidate inputs, recalculate the totals, and provide a revised summary.
 
 ### *Scenario 19: User attempts to update a non-existent item*
 *User:*
-- "Items: ID123,100,500.00, ID124,50,1200.00"  
+- "Items: 100100076,100,500.00, 100100077,50,1200.00"  
 *Expected Response:* Record these items and compute totals.
 *User then instructs:*
-- "Update item: ID125,35,250.00"  
-*Expected Response:* Notify the user that item ID "ID125" does not exist in the current list and ask if they would like to add it as a new entry.
+- "Update item: 100100078,35,250.00"  
+*Expected Response:* Notify the user that item ID "100100078" does not exist in the current list and ask if they would like to add it as a new entry.
 
 ---
 *Current Purchase Order Details*:  
@@ -629,6 +629,7 @@ If you respond with 'Yes', I'll confirm with *"Purchase Order created successful
 Upon receiving a 'Yes' response, inquire whether the user would like the document sent to their email and request their email address.
 If you respond with an email id, I'll confirm with "Email sent successfully to [received email id].".
 """
+
 po_database_schema="""
 The user wants to query the MySQL database. Generate a **pure SQL query** without explanations, comments, or descriptions.
 

@@ -86,6 +86,7 @@ class ItemMaster(Base):
     itemDiffs3 = relationship("ItemDiffs", foreign_keys=[diffType3])
     itemPromotionDetail = relationship("PromotionDetails", back_populates="itemMaster")
     itemPurchaseOrder=relationship("PoDetails", back_populates="itemMaster")
+
 class ItemSupplier(Base):
     __tablename__ = "itemSupplier"
 
@@ -95,6 +96,7 @@ class ItemSupplier(Base):
     supplier = relationship("Supplier", back_populates="itemSuppliers")
     supplierId = Column(String(225), ForeignKey("suppliers.supplierId"))
     itemId = Column(String(225), ForeignKey("itemMaster.itemId"))
+    
 class ItemDiffs(Base):
     __tablename__ = "itemDiffs"
 
